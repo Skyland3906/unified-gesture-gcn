@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Unified Gesture GCN — 实时静+动态手势识别</title>
+  <script src="/static/mediapipe/hands/hands.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --border: #334155;
+      --text: #f1f5f9; --muted: #94a3b8;
+      --accent: #38bdf8; --green: #22c55e; --amber: #f59e0b; --red: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text); padding: 20px; line-height: 1.5;
+    }
+    header {
+      max-width: 1200px; margin: 0 auto 20px; display: flex;
+      justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;
+    }
+    h1 { font-size: 1.4rem; font-weight: 700; }
+    .meta { font-size: 0.85rem; color: var(--muted); }
+    .grid {
+      max-width: 1200px; margin: 0 auto; display: grid;
+      grid-template-columns: 1.45fr 1fr; gap: 20px;
+    }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+    .card {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 14px; padding: 18px;
+    }
+    .stage {
+      position: relative; width: 100%; aspect-ratio: 4/3;
+      background: #020617; border-radius: 10px; overflow: hidden;
+    }
+    video, canvas {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: cover; transform: scaleX(-1);
+    }
+    canvas { pointer-events: none; background: transparent; }
+    .overlay-badge {
+      position: absolute; top: 12px; left: 12px; z-index: 5;
+      background: rgba(15, 23, 42, 0.82); border: 1px solid var(--border);
+      padding: 6px 12px; border-radius: 999px; font-size: 0.85rem;
+    }
+    .controls { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+    button {
+      background: var(--accent); color: #0f172a; border: none; font-weight: 600;
+      padding: 9px 16px; border-radius: 8px; cursor: pointer; font-size: 0.9rem;
+    }
+    button.secondary { background: #334155; color: var(--text); }
+    button.danger { background: var(--red); color: #fff; }
+    button.success { background: var(--green); color: #052e16; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .pred-box {
+      text-align: center; padding: 18px; background: #0f172a;
+      border-radius: 10px; border: 1px solid var(--border); margin-bottom: 16px;
+    }
+    .pred-label { font-size: 1.9rem; font-weight: 800; color: var(--accent); }
+    .pred-sub {
+      margin-top: 6px; display: flex; justify-content: center; gap: 14px;
+      font-size: 0.85rem; color: var(--muted); flex-wrap: wrap;
+    }
+    .tag {
+      padding: 2px 10px; border-radius: 999px; font-weight: 600; font-size: 0.78rem;
+    }
+    .tag.static { background: rgba(56, 189, 248, 0.2); color: var(--accent); }
+    .tag.dynamic { background: rgba(245, 158, 11, 0.2); color: var(--amber); }
+    .prob-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 0.84rem; }
+    .prob-name { width: 145px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bar-bg { flex: 1; height: 8px; background: #0f172a; border-radius: 4px; overflow: hidden; }
+    .bar-fill { height: 100%; background: var(--accent); transition: width 0.08s linear; }
+    .section-title {
+      font-size: 0.95rem; font-weight: 700; margin: 16px 0 10px;
+      border-top: 1px solid var(--border); padding-top: 14px;
+    }
+    .row { display: flex; gap: 8px; margin-bottom: 10px; }
+    input[type="text"], select {
+      flex: 1; background: #0f172a; color: var(--text); border: 1px solid var(--border);
+      padding: 8px 12px; border-radius: 8px; font-size: 0.9rem;
+    }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .chip {
+      background: #0f172a; border: 1px solid var(--border); color: var(--text);
+      padding: 4px 10px; border-radius: 999px; font-size: 0.8rem; cursor: pointer;
+    }
+    .chip.active { border-color: var(--accent); color: var(--accent); }
+    .log {
+      font-size: 0.82rem; color: var(--muted); background: #0f172a;
+      padding: 8px 10px; border-radius: 8px; min-height: 36px; margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Unified Gesture GCN — 实时静+动态手势识别</h1>
+      <div class="meta" id="modelMeta">正在连接后端 PyTorch 模型...</div>
+    </div>
+    <div class="meta">Plan A: DA-GCN + DSTSA-GCN (Grouped + MS-TCN) + SKETCH DRE</div>
+  </header>
+
+  <div class="grid">
+    <!-- Left: Camera & Skeleton -->
+    <div class="card">
+      <div class="stage">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="canvas" width="640" height="480"></canvas>
+        <div class="overlay-badge" id="camStatus">摄像头未开启</div>
+      </div>
+      <div class="row" style="margin-top:14px; margin-bottom:0;">
+        <select id="cameraSelect">
+          <option value="">自动选择物理摄像头（跳过虚拟摄像头）</option>
+        </select>
+        <button id="btnRefreshCams" class="secondary">刷新列表</button>
+      </div>
+      <div class="controls">
+        <button id="btnStart">开启摄像头实时识别</button>
+        <button id="btnStop" class="secondary" disabled>停止</button>
+        <button id="btnReset" class="secondary">重置滑动窗口</button>
+      </div>
+    </div>
+
+    <!-- Right: Prediction & Custom Recording/Training -->
+    <div class="card">
+      <div class="pred-box">
+        <div class="pred-label" id="predLabel">等待手部进入画面</div>
+        <div class="pred-sub">
+          <span id="predConf">置信度: --</span>
+          <span id="predLatency">后端延迟: -- ms</span>
+          <span id="predMode" class="tag static">静态 / 动态</span>
+        </div>
+        <div class="pred-sub" style="margin-top:6px;">
+          <span id="predEnergy">DRE 运动能量: 0.000</span>
+        </div>
+      </div>
+
+      <div id="probList"></div>
+
+      <div class="section-title">录制真实手势 & 一键训练 UnifiedGestureGCN</div>
+      <div class="meta" style="margin-bottom:8px;">
+        提示：每个手势录制 3~5 条真实样本（支持任意静态/动态手势），点击训练即可热更新模型权重。
+      </div>
+      <div class="chips" id="presetChips"></div>
+      <div class="row">
+        <input type="text" id="labelInput" placeholder="输入或选择手势名称（如：握拳 / 点赞 / 右滑）" value="static_open_palm" />
+        <button id="btnRecord" class="secondary" disabled>录制 1.2s</button>
+      </div>
+      <div class="controls" style="margin-top:8px;">
+        <button id="btnTrain" class="success">一键训练并热加载</button>
+        <button id="btnClear" class="danger">清空录制样本</button>
+      </div>
+      <div class="log" id="statusLog">就绪。请点击左侧“开启摄像头实时识别”。</div>
+    </div>
+  </div>
+
+  <script>
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const camStatus = document.getElementById("camStatus");
+    const modelMeta = document.getElementById("modelMeta");
+    const predLabel = document.getElementById("predLabel");
+    const predConf = document.getElementById("predConf");
+    const predLatency = document.getElementById("predLatency");
+    const predMode = document.getElementById("predMode");
+    const predEnergy = document.getElementById("predEnergy");
+    const probList = document.getElementById("probList");
+    const labelInput = document.getElementById("labelInput");
+    const presetChips = document.getElementById("presetChips");
+    const statusLog = document.getElementById("statusLog");
+
+    const btnStart = document.getElementById("btnStart");
+    const btnStop = document.getElementById("btnStop");
+    const btnReset = document.getElementById("btnReset");
+    const btnRecord = document.getElementById("btnRecord");
+    const btnTrain = document.getElementById("btnTrain");
+    const btnClear = document.getElementById("btnClear");
+    const cameraSelect = document.getElementById("cameraSelect");
+    const btnRefreshCams = document.getElementById("btnRefreshCams");
+
+    const VIRTUAL_CAM_RE = /virtual|obs|vcam|wecam|ivcam|manycam|snap|droidcam|iriun|epoccam|youcam|e2esoft|splitcam|camo|nvidia broadcast|xsplit|mmhmm|虚拟|直播|美颜|\bir\b|infrared|depth|hello/i;
+    const FALLBACK_HAND_CONNECTIONS = [
+      [0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],
+      [5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],
+      [13,17],[17,18],[18,19],[19,20],[0,17]
+    ];
+    const FRAME_INTERVAL_MS = 55;   // ~18 FPS, smooth & avoids main-thread starvation
+    const MIN_YIELD_MS = 25;        // Always yield >=25ms to UI event loop between frames
+    const MAX_PROC_WIDTH = 480;     // Downscale high-res webcams before MediaPipe
+
+    const procCanvas = document.createElement("canvas");
+    const procCtx = procCanvas.getContext("2d", { willReadFrequently: false });
+
+    const PRESETS = [
+      "static_open_palm", "static_fist", "static_ok_pinch",
+      "dynamic_swipe_right", "dynamic_grab_close", "dynamic_circle_wave"
+    ];
+
+    let ws = null;
+    let stream = null;
+    let running = false;
+    let switchingCamera = false;
+    let isProcessing = false;
+    let loopTimer = null;
+    let activeSessionId = 0;
+    let hands = null;
+    let handsReady = false;
+    let recording = false;
+    let recordedFrames = [];
+    let recordedCounts = {};
+    let wsPending = false;
+    let wsPendingSince = 0;
+    let consecutiveErrors = 0;
+
+    function logMsg(text) { statusLog.textContent = text; }
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function withTimeout(promise, ms, message) {
+      let timer = null;
+      return Promise.race([
+        promise.finally(() => { if (timer) clearTimeout(timer); }),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(message)), ms);
+        })
+      ]);
+    }
+
+    function stopMediaStream() {
+      if (stream) {
+        stream.getTracks().forEach(t => {
+          try { t.stop(); } catch (_) {}
+        });
+        stream = null;
+      }
+      try {
+        video.pause();
+        video.srcObject = null;
+      } catch (_) {}
+    }
+
+    async function waitForVideoFrame(timeoutMs = 6000) {
+      if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+        return;
+      }
+      await withTimeout(
+        new Promise((resolve, reject) => {
+          const onReady = () => {
+            if (video.videoWidth > 0 && video.videoHeight > 0) {
+              cleanup();
+              resolve();
+            }
+          };
+          const onError = () => {
+            cleanup();
+            reject(new Error("视频流加载失败"));
+          };
+          const cleanup = () => {
+            video.removeEventListener("loadeddata", onReady);
+            video.removeEventListener("canplay", onReady);
+            video.removeEventListener("resize", onReady);
+            video.removeEventListener("error", onError);
+          };
+          video.addEventListener("loadeddata", onReady);
+          video.addEventListener("canplay", onReady);
+          video.addEventListener("resize", onReady);
+          video.addEventListener("error", onError);
+          onReady();
+        }),
+        timeoutMs,
+        "摄像头打开超时（该设备可能未输出画面，请从下拉框切换其他物理摄像头）"
+      );
+    }
+
+    async function requestCameraStream(deviceId) {
+      const candidates = deviceId
+        ? [
+            { deviceId: { exact: deviceId }, width: { ideal: 640 }, height: { ideal: 480 } },
+            { deviceId: { exact: deviceId } }
+          ]
+        : [
+            { width: { ideal: 640 }, height: { ideal: 480 } },
+            true
+          ];
+
+      let lastErr = null;
+      for (const videoConstraint of candidates) {
+        try {
+          return await withTimeout(
+            navigator.mediaDevices.getUserMedia({ video: videoConstraint, audio: false }),
+            10000,
+            "请求摄像头超时（摄像头可能被其他程序占用，或虚拟摄像头未启动）"
+          );
+        } catch (err) {
+          lastErr = err;
+          // Permission denied or device missing: no need to retry simpler constraints on the same device
+          if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError" || err.name === "NotFoundError") {
+            throw err;
+          }
+          await sleep(150);
+        }
+      }
+      throw lastErr || new Error("无法打开摄像头");
+    }
+
+    async function refreshCameraList(preferReal = true) {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter(d => d.kind === "videoinput");
+        const prevVal = cameraSelect.value;
+        cameraSelect.innerHTML = "";
+
+        if (videoInputs.length === 0) {
+          const opt = document.createElement("option");
+          opt.value = "";
+          opt.textContent = "未检测到摄像头";
+          cameraSelect.appendChild(opt);
+          return [];
+        }
+
+        let firstRealId = "";
+        videoInputs.forEach((dev, idx) => {
+          const opt = document.createElement("option");
+          opt.value = dev.deviceId;
+          const label = dev.label || `摄像头 #${idx + 1}`;
+          const isVirtual = VIRTUAL_CAM_RE.test(label);
+          opt.textContent = isVirtual ? `[虚拟/特殊] ${label}` : label;
+          if (!isVirtual && !firstRealId) firstRealId = dev.deviceId;
+          cameraSelect.appendChild(opt);
+        });
+
+        if (prevVal && videoInputs.some(d => d.deviceId === prevVal)) {
+          cameraSelect.value = prevVal;
+        } else if (preferReal && firstRealId) {
+          cameraSelect.value = firstRealId;
+        }
+        return videoInputs;
+      } catch (e) {
+        return [];
+      }
+    }
+
+    async function openSelectedCamera(deviceId, sessionId = activeSessionId) {
+      const hadStream = Boolean(stream);
+      stopMediaStream();
+      if (hadStream) {
+        // Give Windows camera drivers a brief moment to release the previous device
+        await sleep(150);
+      }
+      if (sessionId !== activeSessionId) return false;
+
+      const nextStream = await requestCameraStream(deviceId);
+      if (sessionId !== activeSessionId) {
+        nextStream.getTracks().forEach(t => t.stop());
+        return false;
+      }
+
+      stream = nextStream;
+      video.srcObject = stream;
+      try {
+        await withTimeout(video.play(), 6000, "视频播放启动超时");
+        await waitForVideoFrame(6000);
+      } catch (err) {
+        stopMediaStream();
+        throw err;
+      }
+
+      if (sessionId !== activeSessionId) {
+        stopMediaStream();
+        return false;
+      }
+
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      return true;
+    }
+
+    function renderChips() {
+      const names = Array.from(new Set([...PRESETS, ...Object.keys(recordedCounts)]));
+      presetChips.innerHTML = "";
+      names.forEach(name => {
+        const el = document.createElement("span");
+        const cnt = recordedCounts[name] || 0;
+        el.className = "chip" + (labelInput.value === name ? " active" : "");
+        el.textContent = cnt > 0 ? `${name} (${cnt})` : name;
+        el.onclick = () => { labelInput.value = name; renderChips(); };
+        presetChips.appendChild(el);
+      });
+    }
+
+    async function fetchStatus() {
+      try {
+        const res = await fetch("/api/status");
+        const data = await res.json();
+        recordedCounts = data.recorded_counts || {};
+        modelMeta.textContent =
+          `设备: ${data.device} | 骨架: ${data.skeleton_type} | 窗口: ${data.seq_len}帧 | 参数量: ${data.params_m}M | 类别数: ${data.labels.length}`;
+        renderChips();
+      } catch (err) {
+        modelMeta.textContent = "后端连接失败，请确认已运行 python scripts/run_web.py";
+      }
+    }
+
+    function connectWS() {
+      if (ws) {
+        try { ws.close(); } catch (_) {}
+      }
+      wsPending = false;
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(`${proto}://${location.host}/ws/predict`);
+      ws.onmessage = (evt) => {
+        wsPending = false;
+        const d = JSON.parse(evt.data);
+        if (d.status === "reset" || d.error) return;
+        predLabel.textContent = d.label;
+        predConf.textContent = `置信度: ${(d.confidence * 100).toFixed(1)}%`;
+        predLatency.textContent = `PyTorch 延迟: ${d.latency_ms} ms`;
+        predEnergy.textContent = `DRE 运动能量: ${d.motion_energy.toFixed(4)} | 窗口填充: ${Math.round(d.buffer_fill * 100)}%`;
+        predMode.textContent = d.is_dynamic ? "动态手势 (Dynamic)" : "静态手势 (Static)";
+        predMode.className = "tag " + (d.is_dynamic ? "dynamic" : "static");
+
+        const entries = Object.entries(d.probabilities).sort((a, b) => b[1] - a[1]);
+        probList.innerHTML = entries.map(([k, v]) => `
+          <div class="prob-row">
+            <span class="prob-name" title="${k}">${k}</span>
+            <div class="bar-bg"><div class="bar-fill" style="width:${(v * 100).toFixed(1)}%"></div></div>
+            <span style="width:42px;text-align:right;">${(v * 100).toFixed(0)}%</span>
+          </div>
+        `).join("");
+      };
+      ws.onerror = () => { wsPending = false; };
+      ws.onclose = () => { wsPending = false; };
+    }
+
+    function drawHandSkeleton(lm) {
+      if (typeof drawConnectors === "function" && typeof drawLandmarks === "function" && typeof HAND_CONNECTIONS !== "undefined") {
+        drawConnectors(ctx, lm, HAND_CONNECTIONS, { color: "#38bdf8", lineWidth: 3 });
+        drawLandmarks(ctx, lm, { color: "#22c55e", lineWidth: 1, radius: 3 });
+        return;
+      }
+      // Lightweight Canvas2D fallback if drawing_utils CDN is unavailable
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.strokeStyle = "#38bdf8";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      for (const [a, b] of FALLBACK_HAND_CONNECTIONS) {
+        ctx.moveTo(lm[a].x * w, lm[a].y * h);
+        ctx.lineTo(lm[b].x * w, lm[b].y * h);
+      }
+      ctx.stroke();
+
+      ctx.fillStyle = "#22c55e";
+      for (const p of lm) {
+        ctx.beginPath();
+        ctx.arc(p.x * w, p.y * h, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function onHandResults(results) {
+      if (!running) return;
+      ctx.save();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        const lm = results.multiHandLandmarks[0];
+        drawHandSkeleton(lm);
+
+        const coords = lm.map(p => [p.x, p.y, p.z]);
+        if (recording) {
+          recordedFrames.push(coords);
+        }
+        const now = Date.now();
+        if (wsPending && now - wsPendingSince > 2000) {
+          wsPending = false;
+        }
+        if (ws && ws.readyState === WebSocket.OPEN && !wsPending) {
+          wsPending = true;
+          wsPendingSince = now;
+          ws.send(JSON.stringify({ landmarks: coords }));
+        }
+        camStatus.textContent = recording
+          ? `● 正在录制 [${labelInput.value}] (${recordedFrames.length} 帧)`
+          : "已检测到手部 (21 关键点)";
+      } else {
+        camStatus.textContent = "未检测到手部";
+      }
+      ctx.restore();
+    }
+
+    async function ensureHandsReady() {
+      if (typeof Hands === "undefined") {
+        throw new Error("本地 MediaPipe Hands 脚本未能加载（请刷新页面或检查 /static/mediapipe/hands/hands.js）");
+      }
+      if (!hands) {
+        hands = new Hands({
+          locateFile: (file) => `/static/mediapipe/hands/${file}`
+        });
+        hands.setOptions({
+          maxNumHands: 1,
+          modelComplexity: 0,
+          minDetectionConfidence: 0.6,
+          minTrackingConfidence: 0.55
+        });
+        hands.onResults(onHandResults);
+      }
+      if (!handsReady && typeof hands.initialize === "function") {
+        await withTimeout(
+          hands.initialize(),
+          20000,
+          "本地 MediaPipe 模型初始化超时"
+        );
+        handsReady = true;
+      }
+    }
+
+    function scheduleNextFrame(sessionId, delayMs) {
+      if (!running || sessionId !== activeSessionId) return;
+      if (loopTimer) clearTimeout(loopTimer);
+      loopTimer = setTimeout(() => loopFrame(sessionId), delayMs);
+    }
+
+    async function loopFrame(sessionId) {
+      if (!running || sessionId !== activeSessionId) return;
+      if (switchingCamera || isProcessing || !hands || video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0 || video.paused || video.ended) {
+        scheduleNextFrame(sessionId, 80);
+        return;
+      }
+
+      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      }
+
+      const scale = Math.min(1, MAX_PROC_WIDTH / video.videoWidth);
+      const pw = Math.max(160, Math.round(video.videoWidth * scale));
+      const ph = Math.max(120, Math.round(video.videoHeight * scale));
+      if (procCanvas.width !== pw || procCanvas.height !== ph) {
+        procCanvas.width = pw;
+        procCanvas.height = ph;
+      }
+      procCtx.drawImage(video, 0, 0, pw, ph);
+
+      const t0 = performance.now();
+      isProcessing = true;
+      try {
+        await withTimeout(
+          hands.send({ image: procCanvas }),
+          8000,
+          "手部追踪处理超时"
+        );
+        consecutiveErrors = 0;
+      } catch (err) {
+        consecutiveErrors += 1;
+        console.error("MediaPipe frame error:", err);
+        if (consecutiveErrors >= 3) {
+          camStatus.textContent = "手部追踪异常";
+          logMsg("手部追踪出错: " + err.message + "（可点击停止后重试或切换摄像头）");
+          stopSession("已因手部追踪错误自动停止: " + err.message);
+          return;
+        }
+      } finally {
+        isProcessing = false;
+      }
+
+      const elapsed = performance.now() - t0;
+      const delay = Math.max(MIN_YIELD_MS, FRAME_INTERVAL_MS - elapsed);
+      scheduleNextFrame(sessionId, delay);
+    }
+
+    function stopSession(message = "已停止实时识别。") {
+      activeSessionId += 1;
+      running = false;
+      switchingCamera = false;
+      isProcessing = false;
+      if (loopTimer) {
+        clearTimeout(loopTimer);
+        loopTimer = null;
+      }
+      stopMediaStream();
+      if (ws) {
+        try { ws.close(); } catch (_) {}
+        ws = null;
+      }
+      wsPending = false;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      btnStart.disabled = false;
+      btnStop.disabled = true;
+      btnRecord.disabled = true;
+      camStatus.textContent = "摄像头已停止";
+      logMsg(message);
+    }
+
+    btnRefreshCams.onclick = async () => {
+      await refreshCameraList(false);
+      logMsg("已刷新摄像头列表。");
+    };
+
+    cameraSelect.onchange = async () => {
+      if (!running) return;
+      const sessionId = activeSessionId;
+      switchingCamera = true;
+      camStatus.textContent = "正在切换摄像头...";
+      logMsg("正在切换摄像头...");
+      try {
+        const ok = await openSelectedCamera(cameraSelect.value, sessionId);
+        if (!ok || sessionId !== activeSessionId) return;
+        const name = cameraSelect.options[cameraSelect.selectedIndex]?.textContent || "";
+        camStatus.textContent = "摄像头已切换";
+        logMsg(`已切换摄像头：${name}`);
+      } catch (err) {
+        camStatus.textContent = "切换失败";
+        logMsg("切换摄像头失败: " + err.message);
+      } finally {
+        switchingCamera = false;
+      }
+    };
+
+    async function openBestAvailableCamera(preferredId, sessionId) {
+      const cams = await refreshCameraList(!preferredId);
+      const triedLabels = [];
+
+      // Build ordered candidate list: preferred first, then non-virtual cams, then remaining cams, finally default ("")
+      const orderedIds = [];
+      const pushUnique = (id) => {
+        if (id && !orderedIds.includes(id)) orderedIds.push(id);
+      };
+      if (preferredId) pushUnique(preferredId);
+      cams.filter(d => d.deviceId && !VIRTUAL_CAM_RE.test(d.label || "")).forEach(d => pushUnique(d.deviceId));
+      cams.filter(d => d.deviceId && VIRTUAL_CAM_RE.test(d.label || "")).forEach(d => pushUnique(d.deviceId));
+
+      // If no deviceIds are visible yet (before permission), try default probe first
+      if (orderedIds.length === 0) {
+        const probeStream = await requestCameraStream("");
+        if (sessionId !== activeSessionId) {
+          probeStream.getTracks().forEach(t => t.stop());
+          return { ok: false, skipped: [] };
+        }
+        const refreshed = await refreshCameraList(true);
+        const probeTrack = probeStream.getVideoTracks()[0];
+        const probeLabel = probeTrack ? probeTrack.label : "";
+        const probeId = probeTrack ? probeTrack.getSettings().deviceId : "";
+
+        if (VIRTUAL_CAM_RE.test(probeLabel) && cameraSelect.value && cameraSelect.value !== probeId) {
+          probeStream.getTracks().forEach(t => t.stop());
+          await sleep(200);
+          return await openBestAvailableCamera(cameraSelect.value, sessionId);
+        }
+
+        stream = probeStream;
+        video.srcObject = stream;
+        try {
+          await withTimeout(video.play(), 6000, "视频播放启动超时");
+          await waitForVideoFrame(6000);
+        } catch (err) {
+          stopMediaStream();
+          throw err;
+        }
+        if (sessionId !== activeSessionId) {
+          stopMediaStream();
+          return { ok: false, skipped: [] };
+        }
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        if (probeId) cameraSelect.value = probeId;
+        if (refreshed.length === 0) throw new Error("未检测到可用摄像头");
+        return { ok: true, skipped: [] };
+      }
+
+      let lastErr = null;
+      for (const devId of orderedIds) {
+        if (sessionId !== activeSessionId) return { ok: false, skipped: triedLabels };
+        const dev = cams.find(d => d.deviceId === devId);
+        const devLabel = dev?.label || devId.slice(0, 8);
+        try {
+          logMsg(`步骤 1/3：正在尝试打开摄像头 [${devLabel}]...`);
+          const ok = await openSelectedCamera(devId, sessionId);
+          if (!ok) return { ok: false, skipped: triedLabels };
+          await refreshCameraList(false);
+          const activeTrack = stream.getVideoTracks()[0];
+          const activeId = activeTrack?.getSettings()?.deviceId || devId;
+          cameraSelect.value = activeId;
+          return { ok: true, skipped: triedLabels };
+        } catch (err) {
+          lastErr = err;
+          if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+            throw err;
+          }
+          triedLabels.push(`${devLabel} (${err.message})`);
+          await sleep(200);
+        }
+      }
+
+      // Final fallback: let browser pick default camera without exact deviceId
+      try {
+        logMsg("步骤 1/3：指定摄像头均打开失败，正在尝试浏览器默认摄像头...");
+        const ok = await openSelectedCamera("", sessionId);
+        if (ok) {
+          await refreshCameraList(false);
+          const activeId = stream.getVideoTracks()[0]?.getSettings()?.deviceId;
+          if (activeId) cameraSelect.value = activeId;
+          return { ok: true, skipped: triedLabels };
+        }
+      } catch (err) {
+        lastErr = err;
+      }
+
+      const detail = triedLabels.length > 0 ? `；已尝试：${triedLabels.join(" / ")}` : "";
+      const hint = "。常见原因：1) 摄像头正被其他网页标签页、微信、腾讯会议或 OBS 占用（请先关闭）；2) 笔记本键盘相机开关/物理遮挡关闭；3) Windows 设置 -> 隐私和安全性 -> 相机 未允许桌面应用访问。";
+      throw new Error((lastErr ? lastErr.message : "无法打开任何摄像头") + detail + hint);
+    }
+
+    btnStart.onclick = async () => {
+      const sessionId = ++activeSessionId;
+      btnStart.disabled = true;
+      btnStop.disabled = false;
+      btnRecord.disabled = true;
+      consecutiveErrors = 0;
+
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error("浏览器禁止当前地址访问摄像头，请务必使用 http://localhost:8000 打开页面（不要用局域网 IP）");
+        }
+        camStatus.textContent = "正在开启摄像头...";
+        logMsg("步骤 1/3：正在请求摄像头权限并打开画面...");
+
+        const openResult = await openBestAvailableCamera(cameraSelect.value, sessionId);
+        if (!openResult.ok || sessionId !== activeSessionId) return;
+
+        camStatus.textContent = "正在加载手部追踪模型...";
+        logMsg("步骤 2/3：摄像头已开启，正在加载 MediaPipe 手部追踪模型（首次约需数秒）...");
+        await ensureHandsReady();
+        if (sessionId !== activeSessionId) return;
+
+        camStatus.textContent = "正在连接后端推理...";
+        logMsg("步骤 3/3：正在连接后端 PyTorch 模型...");
+        connectWS();
+
+        running = true;
+        btnRecord.disabled = false;
+        const activeName = stream.getVideoTracks()[0]?.label || "默认摄像头";
+        const camCount = cameraSelect.options.length;
+        const skipNote = openResult.skipped.length > 0 ? `（已自动跳过不可用设备）` : "";
+        camStatus.textContent = "已启动，等待手部进入画面";
+        logMsg(`已启用 [${activeName}]${skipNote}，正在实时识别（共检测到 ${camCount} 个摄像头，可在下拉框随时切换）...`);
+        scheduleNextFrame(sessionId, MIN_YIELD_MS);
+      } catch (err) {
+        if (sessionId !== activeSessionId) return;
+        stopSession("启动失败: " + err.message);
+      }
+    };
+
+    btnStop.onclick = () => {
+      stopSession("已停止实时识别。");
+    };
+
+    btnReset.onclick = () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: "reset" }));
+        logMsg("已重置后端滑动窗口与平滑状态。");
+      }
+    };
+
+    btnRecord.onclick = async () => {
+      const label = labelInput.value.trim();
+      if (!label) { logMsg("请先输入手势名称！"); return; }
+      btnRecord.disabled = true;
+      recordedFrames = [];
+      recording = true;
+      logMsg(`正在录制 [${label}]，请保持或做出该手势 (1.2 秒)...`);
+
+      setTimeout(async () => {
+        recording = false;
+        btnRecord.disabled = false;
+        if (recordedFrames.length < 6) {
+          logMsg(`录制失败：仅捕获到 ${recordedFrames.length} 帧，请确保手部在画面中。`);
+          return;
+        }
+        const res = await fetch("/api/samples", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ label, frames: recordedFrames })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          logMsg("保存失败: " + data.detail);
+        } else {
+          recordedCounts = data.recorded_counts;
+          renderChips();
+          logMsg(`已保存 [${label}] 样本 #${data.count}（捕获 ${recordedFrames.length} 帧）。`);
+        }
+      }, 1200);
+    };
+
+    btnTrain.onclick = async () => {
+      btnTrain.disabled = true;
+      logMsg("正在使用真实录制样本训练 UnifiedGestureGCN（含数据增强）...");
+      try {
+        const res = await fetch("/api/train", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ epochs: 18 })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          logMsg("训练失败: " + data.detail);
+        } else {
+          await fetchStatus();
+          logMsg(`训练完成并已热加载！类别: [${data.labels.join(", ")}] | 训练集准确率: ${(data.train_acc * 100).toFixed(1)}%`);
+        }
+      } finally {
+        btnTrain.disabled = false;
+      }
+    };
+
+    btnClear.onclick = async () => {
+      await fetch("/api/samples", { method: "DELETE" });
+      recordedCounts = {};
+      renderChips();
+      logMsg("已清空所有自定义录制样本。");
+    };
+
+    fetchStatus();
+    refreshCameraList(true);
+  </script>
+</body>
+</html>
