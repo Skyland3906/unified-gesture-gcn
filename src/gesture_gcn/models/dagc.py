@@ -75,13 +75,13 @@ class DualStreamDAGC(nn.Module):
         ch_diff = self.ch_dru(feat) if self.ch_dru is not None else None
         ch_attn = self.ch_aru(feat) if self.ch_aru is not None else None
         s_adj = self.ch_tam(ch_diff, ch_attn)
-        z_s = torch.einsum("bctn,bcnm->bctm", feat, s_adj)
+        z_s = torch.matmul(feat, s_adj)
 
         # 2. Temporal-wise non-shared topology H: (B, T, N, N)
         tm_diff = self.tm_dru(feat) if self.tm_dru is not None else None
         tm_attn = self.tm_aru(feat) if self.tm_aru is not None else None
         h_adj = self.tm_tam(tm_diff, tm_attn)
-        z_h = torch.einsum("bctn,btnm->bctm", feat, h_adj)
+        z_h = torch.matmul(feat.transpose(1, 2), h_adj).transpose(1, 2)
 
         # 3. Channel-Temporal Fusion (CTF)
         return self.eps * z_s + self.gamma * z_h

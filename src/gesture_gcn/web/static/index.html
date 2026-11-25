@@ -170,7 +170,7 @@
           <input type="checkbox" id="swapHands" checked /> 交换左右（画面上左右标反了就切一下）
         </label>
         <label>
-          <input type="checkbox" id="hqMode" checked /> 高精度（慢，远距离更稳）
+          <input type="checkbox" id="hqMode" /> 高精度（远距离更稳，略慢）
         </label>
       </div>
 
@@ -310,9 +310,11 @@
       [5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],
       [13,17],[17,18],[18,19],[19,20],[0,17]
     ];
-    const FRAME_INTERVAL_MS = 55;   // ~18 FPS, smooth & avoids main-thread starvation
-    const MIN_YIELD_MS = 25;        // Always yield >=25ms to UI event loop between frames
-    const MAX_PROC_WIDTH = 480;     // Downscale high-res webcams before MediaPipe
+    const FRAME_INTERVAL_MS = 38;     // ~26 FPS: 32 帧窗口约 1.2s，与录制时长对齐
+    const FAST_YIELD_MS = 6;          // 轻量帧只需短暂让出主线程即可保持高帧率
+    const HEAVY_YIELD_MS = 18;        // 单帧耗时偏高时加大让出时间，防页面卡死
+    const MAX_PROC_WIDTH_FAST = 320;  // 轻量高速档：MediaPipe 手掌检测内部缩放到 192px
+    const MAX_PROC_WIDTH_HQ = 480;    // 高精度档：远距离/小目标更稳
 
     const procCanvas = document.createElement("canvas");
     const procCtx = procCanvas.getContext("2d", { willReadFrequently: false });
@@ -388,8 +390,8 @@
     let recording = false;
     let recordedFrames = [];
     let recordedCounts = {};
-    let wsPendingBy = { Left: false, Right: false };   // 按手分别防积压
-    let wsPendingSinceBy = { Left: 0, Right: 0 };
+    let wsPending = false;                             // 单帧双手指打包成一次 Batch 请求，防积压
+    let wsPendingSince = 0;
     let handMissFrames = { Left: 0, Right: 0 };        // 某只手连续缺席帧数
     let lastPred = { Left: null, Right: null };
     let recordingSide = "右手";
@@ -632,20 +634,29 @@
       if (ws) {
         try { ws.close(); } catch (_) {}
       }
-      wsPendingBy = { Left: false, Right: false };
-      wsPendingSinceBy = { Left: 0, Right: 0 };
+      wsPending = false;
+      wsPendingSince = 0;
       const proto = location.protocol === "https:" ? "wss" : "ws";
       ws = new WebSocket(`${proto}://${location.host}/ws/predict`);
       ws.onmessage = (evt) => {
         const d = JSON.parse(evt.data);
-        if (d.status === "reset" || d.error) return;
+        if (d.status === "reset") return;
+        wsPending = false;
+        if (d.error) return;
+        if (d.results && typeof d.results === "object") {
+          for (const [rawSide, res] of Object.entries(d.results)) {
+            const side = rawSide === "Left" ? "Left" : "Right";
+            lastPred[side] = res;
+            renderHandResult(side, res);
+          }
+          return;
+        }
         const side = d.hand === "Left" ? "Left" : "Right";
-        wsPendingBy[side] = false;
         lastPred[side] = d;
         renderHandResult(side, d);
       };
-      ws.onerror = () => { wsPendingBy = { Left: false, Right: false }; };
-      ws.onclose = () => { wsPendingBy = { Left: false, Right: false }; };
+      ws.onerror = () => { wsPending = false; };
+      ws.onclose = () => { wsPending = false; };
     }
 
     const HAND_COLORS = {
@@ -700,15 +711,16 @@
       drawHandLabel(lm, side, col.text);
     }
 
-    function sendLandmarks(side, coords) {
+    function sendHandsBatch(handsBatch) {
+      if (!handsBatch || Object.keys(handsBatch).length === 0) return;
       const now = Date.now();
-      if (wsPendingBy[side] && now - wsPendingSinceBy[side] > 2000) {
-        wsPendingBy[side] = false;   // 超时自解锁：某只手卡住不会堵死另一只手
+      if (wsPending && now - wsPendingSince > 2000) {
+        wsPending = false;   // 超时自解锁，防止偶发丢包导致卡死
       }
-      if (ws && ws.readyState === WebSocket.OPEN && !wsPendingBy[side]) {
-        wsPendingBy[side] = true;
-        wsPendingSinceBy[side] = now;
-        ws.send(JSON.stringify({ landmarks: coords, hand: side }));
+      if (ws && ws.readyState === WebSocket.OPEN && !wsPending) {
+        wsPending = true;
+        wsPendingSince = now;
+        ws.send(JSON.stringify({ hands: handsBatch }));
       }
     }
 
@@ -727,6 +739,7 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       const seen = { Left: false, Right: false };
+      const handsBatch = {};
       let recordTarget = null;
 
       for (let i = 0; i < lms.length; i++) {
@@ -744,8 +757,11 @@
 
         const coords = lm.map(p => [p.x, p.y, p.z]);
         if (!recordTarget) recordTarget = { side, coords };
-        sendLandmarks(side, coords);
+        handsBatch[side] = coords;
       }
+
+      // 将本帧检测到的单手或双手打包为一次请求，后端合并 Batch=2 推理
+      sendHandsBatch(handsBatch);
 
       // 某只手离开画面超过 25 帧，清空它自己的滑动窗口，避免再次出现时接上旧数据
       for (const side of ["Left", "Right"]) {
@@ -812,7 +828,8 @@
         canvas.height = video.videoHeight;
       }
 
-      const scale = Math.min(1, MAX_PROC_WIDTH / video.videoWidth);
+      const maxProcWidth = (hqModeEl && hqModeEl.checked) ? MAX_PROC_WIDTH_HQ : MAX_PROC_WIDTH_FAST;
+      const scale = Math.min(1, maxProcWidth / video.videoWidth);
       const pw = Math.max(160, Math.round(video.videoWidth * scale));
       const ph = Math.max(120, Math.round(video.videoHeight * scale));
       if (procCanvas.width !== pw || procCanvas.height !== ph) {
@@ -844,7 +861,8 @@
       }
 
       const elapsed = performance.now() - t0;
-      const delay = Math.max(MIN_YIELD_MS, FRAME_INTERVAL_MS - elapsed);
+      const minYield = elapsed >= 28 ? HEAVY_YIELD_MS : FAST_YIELD_MS;
+      const delay = Math.max(minYield, FRAME_INTERVAL_MS - elapsed);
       scheduleNextFrame(sessionId, delay);
     }
 
@@ -862,8 +880,8 @@
         try { ws.close(); } catch (_) {}
         ws = null;
       }
-      wsPendingBy = { Left: false, Right: false };
-      wsPendingSinceBy = { Left: 0, Right: 0 };
+      wsPending = false;
+      wsPendingSince = 0;
       resetAllHandPanels();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       btnStart.disabled = false;
@@ -1025,7 +1043,7 @@
         const skipNote = openResult.skipped.length > 0 ? `（已自动跳过不可用设备）` : "";
         camStatus.textContent = "已启动，等待手部进入画面";
         logMsg(`已启用 [${activeName}]${skipNote}，正在实时识别（共检测到 ${camCount} 个摄像头，可在下拉框随时切换）...`);
-        scheduleNextFrame(sessionId, MIN_YIELD_MS);
+        scheduleNextFrame(sessionId, FAST_YIELD_MS);
       } catch (err) {
         if (sessionId !== activeSessionId) return;
         stopSession("启动失败: " + err.message);

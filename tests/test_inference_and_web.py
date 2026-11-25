@@ -61,3 +61,11 @@ def test_web_app_status_and_websocket(tmp_path: Path) -> None:
         assert "label" in out
         assert "motion_energy" in out
         assert "latency_ms" in out
+
+        # Batched two-hand inference protocol
+        ws.send_json({"hands": {"Left": frame, "Right": frame}})
+        batched = ws.receive_json()
+        assert "results" in batched
+        assert set(batched["results"].keys()) == {"Left", "Right"}
+        assert "label" in batched["results"]["Left"]
+        assert "label" in batched["results"]["Right"]

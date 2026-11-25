@@ -79,6 +79,7 @@ class _AppState:
             labels=list(GESTURE_LABELS),
             device=self.device,
         )
+        recognizer.compile_for_inference(self.cfg.data.seq_len)
         recognizer.save_checkpoint(self.checkpoint_path, self.cfg.data)
         return recognizer
 
@@ -163,6 +164,7 @@ def create_app(
             labels=labels,
             device=state.device,
         )
+        await asyncio.to_thread(new_recognizer.compile_for_inference, state.cfg.data.seq_len)
         await asyncio.to_thread(new_recognizer.save_checkpoint, state.checkpoint_path, state.cfg.data)
         with state.infer_lock:
             state.recognizer = new_recognizer
@@ -172,13 +174,14 @@ def create_app(
             "params_m": round(model.count_parameters() / 1e6, 3),
         }
 
-    def _run_predict(recognizer: Any, seq: torch.Tensor) -> Any:
+    def _run_predict_batch(seqs_by_key: dict[str, torch.Tensor]) -> dict[str, Any]:
         with state.infer_lock:
-            return recognizer.predict(seq)
+            return state.recognizer.predict_batch(seqs_by_key)
 
     @app.websocket("/ws/predict")
     async def ws_predict(websocket: WebSocket) -> None:
         await websocket.accept()
+        conn_id = id(websocket)
         hands = ("Left", "Right")
         bufs: dict[str, SlidingWindowBuffer] = {
             hand: SlidingWindowBuffer(
@@ -187,36 +190,29 @@ def create_app(
             )
             for hand in hands
         }
-        # 每只手一份 recognizer：共享同一份模型权重，但 EMA 平滑各自独立，
-        # 否则两只手的结果会在同一个平滑缓存里互相污染。
-        recs: dict[str, tuple[Any, Any]] = {}
 
-        def recognizer_for(hand: str) -> Any:
-            base = state.recognizer
-            cached = recs.get(hand)
-            if cached is None or cached[0] is not base:
-                rec = GestureRecognizer(
-                    model=base.model,
-                    preprocessor=base.preprocessor,
-                    labels=base.labels,
-                    device=base.device,
-                    ema_alpha=base.ema_alpha,
-                    dynamic_threshold=base.dynamic_threshold,
-                )
-                recs[hand] = (base, rec)
-            return recs[hand][1]
+        def hand_key(hand: str) -> str:
+            return f"{conn_id}:{hand}"
 
         def reset_hand(hand: str | None) -> None:
             targets = hands if hand is None else (hand,)
-            for name in targets:
-                if name in bufs:
-                    bufs[name].clear()
-                cached = recs.get(name)
-                if cached is not None:
-                    cached[1].reset_smoothing()
-            if hand is None:
-                with state.infer_lock:
-                    state.recognizer.reset_smoothing()
+            with state.infer_lock:
+                for name in targets:
+                    if name in bufs:
+                        bufs[name].clear()
+                        state.recognizer.reset_smoothing(hand_key(name))
+
+        def serialize_pred(hand: str, pred: Any) -> dict[str, Any]:
+            return {
+                "hand": hand,
+                "label": pred.label,
+                "confidence": round(pred.confidence, 4),
+                "probabilities": pred.probabilities,
+                "motion_energy": pred.motion_energy,
+                "is_dynamic": pred.is_dynamic,
+                "latency_ms": pred.latency_ms,
+                "buffer_fill": len(bufs[hand]) / bufs[hand].seq_len,
+            }
 
         try:
             while True:
@@ -227,35 +223,53 @@ def create_app(
                     await websocket.send_json({"status": "reset", "hand": msg.get("hand")})
                     continue
 
+                # Preferred batched protocol: {"hands": {"Left": [[...]], "Right": [[...]]}}
+                hands_payload = msg.get("hands")
+                if isinstance(hands_payload, dict) and hands_payload:
+                    seqs_by_key: dict[str, torch.Tensor] = {}
+                    key_to_hand: dict[str, str] = {}
+                    try:
+                        for raw_hand, lms in hands_payload.items():
+                            if not lms:
+                                continue
+                            hand = "Left" if raw_hand == "Left" else "Right"
+                            bufs[hand].push(lms)
+                            k = hand_key(hand)
+                            seqs_by_key[k] = bufs[hand].get_sequence()
+                            key_to_hand[k] = hand
+                    except ValueError as exc:
+                        await websocket.send_json({"error": str(exc)})
+                        continue
+
+                    if not seqs_by_key:
+                        continue
+
+                    preds = await asyncio.to_thread(_run_predict_batch, seqs_by_key)
+                    results = {
+                        key_to_hand[k]: serialize_pred(key_to_hand[k], pred)
+                        for k, pred in preds.items()
+                    }
+                    await websocket.send_json({"results": results})
+                    continue
+
+                # Backwards-compatible single-hand protocol: {"landmarks": [[...]], "hand": "Right"}
                 landmarks = msg.get("landmarks")
                 if not landmarks:
                     continue
 
-                hand = str(msg.get("hand") or "Right")
-                if hand not in bufs:
-                    hand = "Right"
-
+                hand = "Left" if msg.get("hand") == "Left" else "Right"
                 try:
                     bufs[hand].push(landmarks)
-                    seq = bufs[hand].get_sequence()
-                    pred = await asyncio.to_thread(_run_predict, recognizer_for(hand), seq)
+                    k = hand_key(hand)
+                    preds = await asyncio.to_thread(_run_predict_batch, {k: bufs[hand].get_sequence()})
                 except ValueError as exc:
                     await websocket.send_json({"error": str(exc), "hand": hand})
                     continue
 
-                await websocket.send_json(
-                    {
-                        "hand": hand,
-                        "label": pred.label,
-                        "confidence": round(pred.confidence, 4),
-                        "probabilities": pred.probabilities,
-                        "motion_energy": pred.motion_energy,
-                        "is_dynamic": pred.is_dynamic,
-                        "latency_ms": pred.latency_ms,
-                        "buffer_fill": len(bufs[hand]) / bufs[hand].seq_len,
-                    }
-                )
+                await websocket.send_json(serialize_pred(hand, preds[k]))
         except WebSocketDisconnect:
             return
+        finally:
+            reset_hand(None)
 
     return app

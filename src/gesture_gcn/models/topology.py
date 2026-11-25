@@ -37,9 +37,11 @@ class AttentionRelationUnit(nn.Module):
         k = self.k_proj(x)
 
         if self.mode == "channel":
-            scores = torch.einsum("bctn,bctm->bcnm", q, k) / math.sqrt(max(seq_len, 1))
+            scores = torch.matmul(q.transpose(-2, -1), k) / math.sqrt(max(seq_len, 1))
         else:
-            scores = torch.einsum("bctn,bctm->btnm", q, k) / math.sqrt(max(channels, 1))
+            q_t = q.permute(0, 2, 3, 1)
+            k_t = k.permute(0, 2, 1, 3)
+            scores = torch.matmul(q_t, k_t) / math.sqrt(max(channels, 1))
         return torch.softmax(scores, dim=-1)
 
 
@@ -134,23 +136,23 @@ class GroupedTopologyAggregation(nn.Module):
         if ref is None:
             raise ValueError("At least one of diff_topo or attn_topo must be provided.")
 
-        batch_size, dim, n_joints, _ = ref.shape
-        fused = torch.zeros_like(ref)
-
+        dim = ref.shape[1]
+        fused: torch.Tensor | None = None
         if self.use_dru and diff_topo is not None:
-            fused = fused + self.alpha_d * diff_topo
+            fused = self.alpha_d * diff_topo
         if self.use_aru and attn_topo is not None:
-            fused = fused + self.alpha_a * attn_topo
+            attn_term = self.alpha_a * attn_topo
+            fused = attn_term if fused is None else fused + attn_term
+        if fused is None:
+            fused = torch.zeros_like(ref)
 
-        # Broadcast grouped static topology (K, N, N) -> (1, D, N, N)
+        # Broadcast grouped static topology (K, N, N) -> (1, D or 1, N, N) without batch-size specialization
         masked_static = self.static_adj * self.static_mask  # (K, N, N)
         if self.mode == "channel" and dim % self.num_groups == 0:
             repeats = dim // self.num_groups
             static_expanded = masked_static.repeat_interleave(repeats, dim=0).unsqueeze(0)
         else:
-            # For temporal mode (arbitrary sequence length T), aggregate grouped prior smoothly
-            static_expanded = masked_static.mean(dim=0, keepdim=True).unsqueeze(0).expand(
-                batch_size, dim, n_joints, n_joints
-            )
+            # Broadcasts cleanly across any (B, T, N, N)
+            static_expanded = masked_static.mean(dim=0, keepdim=True).unsqueeze(0)
 
         return self.act(fused + static_expanded)
