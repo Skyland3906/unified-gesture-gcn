@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Unified Gesture GCN — 实时静+动态手势识别</title>
+  <title>统一手势图卷积网络 — 实时静+动态手势识别</title>
   <script src="/static/mediapipe/hands/hands.js"></script>
   <style>
     :root {
@@ -17,16 +17,16 @@
       background: var(--bg); color: var(--text); padding: 20px; line-height: 1.5;
     }
     header {
-      max-width: 1200px; margin: 0 auto 20px; display: flex;
+      max-width: 1380px; margin: 0 auto 20px; display: flex;
       justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;
     }
     h1 { font-size: 1.4rem; font-weight: 700; }
     .meta { font-size: 0.85rem; color: var(--muted); }
     .grid {
-      max-width: 1200px; margin: 0 auto; display: grid;
-      grid-template-columns: 1.45fr 1fr; gap: 20px;
+      max-width: 1380px; margin: 0 auto; display: grid;
+      grid-template-columns: 1.2fr 1.15fr; gap: 20px;
     }
-    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+    @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
     .card {
       background: var(--panel); border: 1px solid var(--border);
       border-radius: 14px; padding: 18px;
@@ -54,24 +54,64 @@
     button.danger { background: var(--red); color: #fff; }
     button.success { background: var(--green); color: #052e16; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
-    .pred-box {
-      text-align: center; padding: 18px; background: #0f172a;
-      border-radius: 10px; border: 1px solid var(--border); margin-bottom: 16px;
+    .options-bar {
+      display: flex; justify-content: space-between; align-items: center;
+      flex-wrap: wrap; gap: 10px; margin-bottom: 12px;
+      padding: 8px 12px; background: #0f172a; border: 1px solid var(--border);
+      border-radius: 10px; font-size: 0.82rem; color: var(--muted);
     }
-    .pred-label { font-size: 1.9rem; font-weight: 800; color: var(--accent); }
+    .options-bar label { cursor: pointer; user-select: none; display: inline-flex; align-items: center; gap: 5px; }
+    .hands-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px;
+    }
+    @media (max-width: 640px) { .hands-grid { grid-template-columns: 1fr; } }
+    .hand-panel {
+      background: #0f172a; border-radius: 12px; border: 1px solid var(--border);
+      padding: 12px; display: flex; flex-direction: column; gap: 8px;
+      transition: border-color 0.15s ease, opacity 0.15s ease;
+    }
+    .hand-panel.left { border-top: 3px solid #22d3ee; }
+    .hand-panel.right { border-top: 3px solid #fb923c; }
+    .hand-panel.idle { opacity: 0.78; }
+    .hand-header {
+      display: flex; justify-content: space-between; align-items: center; gap: 6px;
+    }
+    .hand-title { font-size: 0.92rem; font-weight: 700; display: inline-flex; align-items: center; gap: 6px; }
+    .hand-panel.left .hand-title { color: #22d3ee; }
+    .hand-panel.right .hand-title { color: #fb923c; }
+    .hand-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .hand-panel.left .hand-dot { background: #22d3ee; }
+    .hand-panel.right .hand-dot { background: #fb923c; }
+    .pred-label {
+      text-align: center; font-size: 1.45rem; font-weight: 800; line-height: 1.25;
+      min-height: 1.85rem; padding: 4px 0;
+    }
+    .hand-panel.left .pred-label { color: #22d3ee; }
+    .hand-panel.right .pred-label { color: #fb923c; }
+    .hand-panel.idle .pred-label { color: var(--muted); font-size: 1.15rem; font-weight: 600; }
     .pred-sub {
-      margin-top: 6px; display: flex; justify-content: center; gap: 14px;
-      font-size: 0.85rem; color: var(--muted); flex-wrap: wrap;
+      display: flex; justify-content: center; gap: 10px;
+      font-size: 0.78rem; color: var(--muted); flex-wrap: wrap;
     }
     .tag {
-      padding: 2px 10px; border-radius: 999px; font-weight: 600; font-size: 0.78rem;
+      padding: 2px 8px; border-radius: 999px; font-weight: 600; font-size: 0.74rem;
     }
+    .tag.idle { background: rgba(148, 163, 184, 0.16); color: var(--muted); }
     .tag.static { background: rgba(56, 189, 248, 0.2); color: var(--accent); }
     .tag.dynamic { background: rgba(245, 158, 11, 0.2); color: var(--amber); }
-    .prob-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 0.84rem; }
-    .prob-name { width: 145px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .bar-bg { flex: 1; height: 8px; background: #0f172a; border-radius: 4px; overflow: hidden; }
+    .prob-list {
+      border-top: 1px solid rgba(51, 65, 85, 0.7); padding-top: 8px; margin-top: 2px;
+      min-height: 112px;
+    }
+    .prob-empty {
+      font-size: 0.78rem; color: var(--muted); text-align: center; padding: 28px 0;
+    }
+    .prob-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 0.78rem; }
+    .prob-name { width: 88px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bar-bg { flex: 1; height: 7px; background: #1e293b; border-radius: 4px; overflow: hidden; }
     .bar-fill { height: 100%; background: var(--accent); transition: width 0.08s linear; }
+    .hand-panel.left .bar-fill { background: #22d3ee; }
+    .hand-panel.right .bar-fill { background: #fb923c; }
     .section-title {
       font-size: 0.95rem; font-weight: 700; margin: 16px 0 10px;
       border-top: 1px solid var(--border); padding-top: 14px;
@@ -96,10 +136,10 @@
 <body>
   <header>
     <div>
-      <h1>Unified Gesture GCN — 实时静+动态手势识别</h1>
-      <div class="meta" id="modelMeta">正在连接后端 PyTorch 模型...</div>
+      <h1>统一手势图卷积网络 — 实时静+动态手势识别</h1>
+      <div class="meta" id="modelMeta">正在连接后端推理模型...</div>
     </div>
-    <div class="meta">Plan A: DA-GCN + DSTSA-GCN (Grouped + MS-TCN) + SKETCH DRE</div>
+    <div class="meta">方案一：注意力增强图卷积 + 双流时空注意力图卷积（分组 + 多尺度时间卷积）+ 运动能量估计</div>
   </header>
 
   <div class="grid">
@@ -123,30 +163,65 @@
       </div>
     </div>
 
-    <!-- Right: Prediction & Custom Recording/Training -->
+    <!-- Right: Dual-Hand Prediction & Custom Recording/Training -->
     <div class="card">
-      <div class="pred-box">
-        <div class="pred-label" id="predLabel">等待手部进入画面</div>
-        <div class="pred-sub">
-          <span id="predConf">置信度: --</span>
-          <span id="predLatency">后端延迟: -- ms</span>
-          <span id="predMode" class="tag static">静态 / 动态</span>
+      <div class="options-bar">
+        <label>
+          <input type="checkbox" id="swapHands" checked /> 交换左右（画面上左右标反了就切一下）
+        </label>
+        <label>
+          <input type="checkbox" id="hqMode" checked /> 高精度（慢，远距离更稳）
+        </label>
+      </div>
+
+      <div class="hands-grid">
+        <!-- Left Hand Window -->
+        <div class="hand-panel left idle" id="panelLeft">
+          <div class="hand-header">
+            <span class="hand-title"><span class="hand-dot"></span>左手识别窗口</span>
+            <span id="predModeLeft" class="tag idle">未检测</span>
+          </div>
+          <div class="pred-label" id="predLabelLeft">等待左手进入</div>
+          <div class="pred-sub">
+            <span id="predConfLeft">置信度: --</span>
+            <span id="predLatencyLeft">延迟: -- ms</span>
+          </div>
+          <div class="pred-sub">
+            <span id="predEnergyLeft">能量: 0.000 | 窗口: 0%</span>
+          </div>
+          <div class="prob-list" id="probListLeft">
+            <div class="prob-empty">等待左手关键点输入...</div>
+          </div>
         </div>
-        <div class="pred-sub" style="margin-top:6px;">
-          <span id="predEnergy">DRE 运动能量: 0.000</span>
+
+        <!-- Right Hand Window -->
+        <div class="hand-panel right idle" id="panelRight">
+          <div class="hand-header">
+            <span class="hand-title"><span class="hand-dot"></span>右手识别窗口</span>
+            <span id="predModeRight" class="tag idle">未检测</span>
+          </div>
+          <div class="pred-label" id="predLabelRight">等待右手进入</div>
+          <div class="pred-sub">
+            <span id="predConfRight">置信度: --</span>
+            <span id="predLatencyRight">延迟: -- ms</span>
+          </div>
+          <div class="pred-sub">
+            <span id="predEnergyRight">能量: 0.000 | 窗口: 0%</span>
+          </div>
+          <div class="prob-list" id="probListRight">
+            <div class="prob-empty">等待右手关键点输入...</div>
+          </div>
         </div>
       </div>
 
-      <div id="probList"></div>
-
-      <div class="section-title">录制真实手势 & 一键训练 UnifiedGestureGCN</div>
+      <div class="section-title">录制真实手势并一键训练手势模型</div>
       <div class="meta" style="margin-bottom:8px;">
         提示：每个手势录制 3~5 条真实样本（支持任意静态/动态手势），点击训练即可热更新模型权重。
       </div>
       <div class="chips" id="presetChips"></div>
       <div class="row">
-        <input type="text" id="labelInput" placeholder="输入或选择手势名称（如：握拳 / 点赞 / 右滑）" value="static_open_palm" />
-        <button id="btnRecord" class="secondary" disabled>录制 1.2s</button>
+        <input type="text" id="labelInput" placeholder="输入或选择手势名称（如：握拳 / 点赞 / 向右挥）" value="张开手掌" />
+        <button id="btnRecord" class="secondary" disabled>录制 1.2 秒</button>
       </div>
       <div class="controls" style="margin-top:8px;">
         <button id="btnTrain" class="success">一键训练并热加载</button>
@@ -162,12 +237,60 @@
     const ctx = canvas.getContext("2d");
     const camStatus = document.getElementById("camStatus");
     const modelMeta = document.getElementById("modelMeta");
-    const predLabel = document.getElementById("predLabel");
-    const predConf = document.getElementById("predConf");
-    const predLatency = document.getElementById("predLatency");
-    const predMode = document.getElementById("predMode");
-    const predEnergy = document.getElementById("predEnergy");
-    const probList = document.getElementById("probList");
+    const handUI = {
+      Left: {
+        name: "左手",
+        panel: document.getElementById("panelLeft"),
+        label: document.getElementById("predLabelLeft"),
+        conf: document.getElementById("predConfLeft"),
+        latency: document.getElementById("predLatencyLeft"),
+        mode: document.getElementById("predModeLeft"),
+        energy: document.getElementById("predEnergyLeft"),
+        probList: document.getElementById("probListLeft")
+      },
+      Right: {
+        name: "右手",
+        panel: document.getElementById("panelRight"),
+        label: document.getElementById("predLabelRight"),
+        conf: document.getElementById("predConfRight"),
+        latency: document.getElementById("predLatencyRight"),
+        mode: document.getElementById("predModeRight"),
+        energy: document.getElementById("predEnergyRight"),
+        probList: document.getElementById("probListRight")
+      }
+    };
+    const swapHandsEl = document.getElementById("swapHands");
+    const hqModeEl = document.getElementById("hqMode");
+    // MediaPipe 的 handedness 是按「前置自拍镜像」约定给出的，而这里喂进去的是摄像头原始帧，
+    // 所以默认勾上交换；勾选结果记忆到本地，下次打开不用再调。
+    try {
+      const savedSwap = localStorage.getItem("swapHands");
+      if (savedSwap !== null) swapHandsEl.checked = savedSwap === "1";
+      const savedHq = localStorage.getItem("hqMode");
+      if (savedHq !== null) hqModeEl.checked = savedHq === "1";
+    } catch (_) {}
+    swapHandsEl.onchange = () => {
+      try { localStorage.setItem("swapHands", swapHandsEl.checked ? "1" : "0"); } catch (_) {}
+      resetAllHandPanels();
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: "reset" }));
+      }
+    };
+    hqModeEl.onchange = () => {
+      try { localStorage.setItem("hqMode", hqModeEl.checked ? "1" : "0"); } catch (_) {}
+      applyHandOptions();
+    };
+
+    function applyHandOptions() {
+      if (!hands) return;
+      const hq = hqModeEl.checked;
+      hands.setOptions({
+        maxNumHands: 2,                                  // 双手：同时追踪左右两只手
+        modelComplexity: hq ? 1 : 0,                     // 1 更准（远距/小目标），0 更快
+        minDetectionConfidence: hq ? 0.65 : 0.55,
+        minTrackingConfidence: hq ? 0.60 : 0.50
+      });
+    }
     const labelInput = document.getElementById("labelInput");
     const presetChips = document.getElementById("presetChips");
     const statusLog = document.getElementById("statusLog");
@@ -199,6 +322,60 @@
       "dynamic_swipe_right", "dynamic_grab_close", "dynamic_circle_wave"
     ];
 
+    // ===== 手势类别「内部名 → 中文显示名」对照表 =====
+    // 内部名是后端训练/存样本用的标识，不要改；想改页面显示的文字只改右边的中文。
+    // 录新类别时在输入框里直接填中文即可，后端会把中文当内部名保存，也能正常训练。
+    const LABEL_ZH = {
+      "static_open_palm":   "张开手掌",
+      "static_fist":        "握拳",
+      "static_ok_pinch":    "拇指食指捏合",
+      "dynamic_swipe_right":"向右挥",
+      "dynamic_swipe_left": "向左挥",
+      "dynamic_swipe_up":   "向上挥",
+      "dynamic_swipe_down": "向下挥",
+      "dynamic_grab_close": "抓握",
+      "dynamic_circle_wave":"画圈挥动",
+      "fist":    "握拳",
+      "palm":    "手掌",
+      "like":    "点赞",
+      "peace":   "剪刀手",
+      "push":    "前推",
+      "pull":    "后拉",
+      "grab":    "抓握",
+      "release": "松开",
+      "none":    "无动作"
+    };
+
+    // 把内部名转成中文；表里没有的就自动把 static_/dynamic_ 前缀去掉、下划线换空格
+    function zhLabel(name) {
+      if (!name) return "";
+      if (LABEL_ZH[name]) return LABEL_ZH[name];
+      return String(name)
+        .replace(/^static_/, "")
+        .replace(/^dynamic_/, "")
+        .replace(/_/g, " ");
+    }
+
+    // 反向：输入框里填的中文 → 后端内部名。表里没有的中文名原样提交（后端支持中文类别）。
+    function toInternalLabel(zh) {
+      for (const [en, cn] of Object.entries(LABEL_ZH)) {
+        if (cn === zh) return en;
+      }
+      return zh;
+    }
+
+    function zhDevice(dev) {
+      const d = String(dev || "").toLowerCase();
+      if (d.includes("cuda") || d.includes("gpu")) return "显卡加速";
+      if (d.includes("mps")) return "苹果芯片加速";
+      return "处理器";
+    }
+
+    function zhSkeleton(sk) {
+      const m = String(sk || "").match(/(\d+)\s*$/);
+      return m ? `${m[1]} 点手部骨架` : "手部骨架";
+    }
+
     let ws = null;
     let stream = null;
     let running = false;
@@ -211,8 +388,11 @@
     let recording = false;
     let recordedFrames = [];
     let recordedCounts = {};
-    let wsPending = false;
-    let wsPendingSince = 0;
+    let wsPendingBy = { Left: false, Right: false };   // 按手分别防积压
+    let wsPendingSinceBy = { Left: 0, Right: 0 };
+    let handMissFrames = { Left: 0, Right: 0 };        // 某只手连续缺席帧数
+    let lastPred = { Left: null, Right: null };
+    let recordingSide = "右手";
     let consecutiveErrors = 0;
 
     function logMsg(text) { statusLog.textContent = text; }
@@ -386,9 +566,9 @@
       names.forEach(name => {
         const el = document.createElement("span");
         const cnt = recordedCounts[name] || 0;
-        el.className = "chip" + (labelInput.value === name ? " active" : "");
-        el.textContent = cnt > 0 ? `${name} (${cnt})` : name;
-        el.onclick = () => { labelInput.value = name; renderChips(); };
+        el.className = "chip" + (toInternalLabel(labelInput.value) === name ? " active" : "");
+        el.textContent = cnt > 0 ? `${zhLabel(name)}（${cnt}）` : zhLabel(name);
+        el.onclick = () => { labelInput.value = zhLabel(name); renderChips(); };
         presetChips.appendChild(el);
       });
     }
@@ -399,54 +579,110 @@
         const data = await res.json();
         recordedCounts = data.recorded_counts || {};
         modelMeta.textContent =
-          `设备: ${data.device} | 骨架: ${data.skeleton_type} | 窗口: ${data.seq_len}帧 | 参数量: ${data.params_m}M | 类别数: ${data.labels.length}`;
+          `运行设备: ${zhDevice(data.device)} | 骨架: ${zhSkeleton(data.skeleton_type)} | 窗口: ${data.seq_len} 帧 | 参数量: ${data.params_m}M | 类别数: ${data.labels.length}`;
         renderChips();
       } catch (err) {
-        modelMeta.textContent = "后端连接失败，请确认已运行 python scripts/run_web.py";
+        modelMeta.textContent = "后端连接失败，请先双击 start_web.bat 启动服务";
       }
+    }
+
+    function resetHandPanel(side) {
+      const ui = handUI[side];
+      if (!ui) return;
+      ui.panel.classList.add("idle");
+      ui.label.textContent = `等待${ui.name}进入`;
+      ui.conf.textContent = "置信度: --";
+      ui.latency.textContent = "延迟: -- ms";
+      ui.energy.textContent = "能量: 0.000 | 窗口: 0%";
+      ui.mode.textContent = "未检测";
+      ui.mode.className = "tag idle";
+      ui.probList.innerHTML = `<div class="prob-empty">等待${ui.name}关键点输入...</div>`;
+    }
+
+    function resetAllHandPanels() {
+      lastPred = { Left: null, Right: null };
+      handMissFrames = { Left: 0, Right: 0 };
+      resetHandPanel("Left");
+      resetHandPanel("Right");
+    }
+
+    function renderHandResult(side, d) {
+      const ui = handUI[side];
+      if (!ui) return;
+      const zh = zhLabel(d.label);
+      ui.panel.classList.remove("idle");
+      ui.label.textContent = zh;
+      ui.conf.textContent = `置信度: ${(d.confidence * 100).toFixed(1)}%`;
+      ui.latency.textContent = `延迟: ${d.latency_ms.toFixed(1)} ms`;
+      ui.energy.textContent = `能量: ${d.motion_energy.toFixed(4)} | 窗口: ${Math.round(d.buffer_fill * 100)}%`;
+      ui.mode.textContent = d.is_dynamic ? "动态手势" : "静态手势";
+      ui.mode.className = "tag " + (d.is_dynamic ? "dynamic" : "static");
+
+      const entries = Object.entries(d.probabilities).sort((a, b) => b[1] - a[1]);
+      ui.probList.innerHTML = entries.map(([k, v]) => `
+          <div class="prob-row">
+            <span class="prob-name" title="${k}">${zhLabel(k)}</span>
+            <div class="bar-bg"><div class="bar-fill" style="width:${(v * 100).toFixed(1)}%"></div></div>
+            <span style="width:36px;text-align:right;">${(v * 100).toFixed(0)}%</span>
+          </div>
+        `).join("");
     }
 
     function connectWS() {
       if (ws) {
         try { ws.close(); } catch (_) {}
       }
-      wsPending = false;
+      wsPendingBy = { Left: false, Right: false };
+      wsPendingSinceBy = { Left: 0, Right: 0 };
       const proto = location.protocol === "https:" ? "wss" : "ws";
       ws = new WebSocket(`${proto}://${location.host}/ws/predict`);
       ws.onmessage = (evt) => {
-        wsPending = false;
         const d = JSON.parse(evt.data);
         if (d.status === "reset" || d.error) return;
-        predLabel.textContent = d.label;
-        predConf.textContent = `置信度: ${(d.confidence * 100).toFixed(1)}%`;
-        predLatency.textContent = `PyTorch 延迟: ${d.latency_ms} ms`;
-        predEnergy.textContent = `DRE 运动能量: ${d.motion_energy.toFixed(4)} | 窗口填充: ${Math.round(d.buffer_fill * 100)}%`;
-        predMode.textContent = d.is_dynamic ? "动态手势 (Dynamic)" : "静态手势 (Static)";
-        predMode.className = "tag " + (d.is_dynamic ? "dynamic" : "static");
-
-        const entries = Object.entries(d.probabilities).sort((a, b) => b[1] - a[1]);
-        probList.innerHTML = entries.map(([k, v]) => `
-          <div class="prob-row">
-            <span class="prob-name" title="${k}">${k}</span>
-            <div class="bar-bg"><div class="bar-fill" style="width:${(v * 100).toFixed(1)}%"></div></div>
-            <span style="width:42px;text-align:right;">${(v * 100).toFixed(0)}%</span>
-          </div>
-        `).join("");
+        const side = d.hand === "Left" ? "Left" : "Right";
+        wsPendingBy[side] = false;
+        lastPred[side] = d;
+        renderHandResult(side, d);
       };
-      ws.onerror = () => { wsPending = false; };
-      ws.onclose = () => { wsPending = false; };
+      ws.onerror = () => { wsPendingBy = { Left: false, Right: false }; };
+      ws.onclose = () => { wsPendingBy = { Left: false, Right: false }; };
     }
 
-    function drawHandSkeleton(lm) {
+    const HAND_COLORS = {
+      Left:  { line: "#22d3ee", joint: "#0891b2", text: "#22d3ee" },
+      Right: { line: "#fb923c", joint: "#d97706", text: "#fb923c" }
+    };
+
+    function drawHandLabel(lm, side, color) {
+      const w = canvas.width;
+      const h = canvas.height;
+      const name = side === "Left" ? "左手" : "右手";
+      ctx.font = "bold 28px 'Microsoft YaHei', sans-serif";
+      // 画布整体随视频做了水平镜像（CSS scaleX(-1)），写字前局部再翻一次把字抵消回正常方向
+      const tx = lm[0].x * w + 11;
+      const ty = lm[0].y * h - 11;
+      ctx.save();
+      ctx.translate(tx, ty);
+      ctx.scale(-1, 1);
+      ctx.fillStyle = "rgba(0,0,0,.6)";
+      ctx.fillText(name, 2, 2);
+      ctx.fillStyle = color;
+      ctx.fillText(name, 0, 0);
+      ctx.restore();
+    }
+
+    function drawHandSkeleton(lm, side) {
+      const col = HAND_COLORS[side] || HAND_COLORS.Right;
       if (typeof drawConnectors === "function" && typeof drawLandmarks === "function" && typeof HAND_CONNECTIONS !== "undefined") {
-        drawConnectors(ctx, lm, HAND_CONNECTIONS, { color: "#38bdf8", lineWidth: 3 });
-        drawLandmarks(ctx, lm, { color: "#22c55e", lineWidth: 1, radius: 3 });
+        drawConnectors(ctx, lm, HAND_CONNECTIONS, { color: col.line, lineWidth: 3 });
+        drawLandmarks(ctx, lm, { color: col.joint, lineWidth: 1, radius: 3 });
+        drawHandLabel(lm, side, col.text);
         return;
       }
       // Lightweight Canvas2D fallback if drawing_utils CDN is unavailable
       const w = canvas.width;
       const h = canvas.height;
-      ctx.strokeStyle = "#38bdf8";
+      ctx.strokeStyle = col.line;
       ctx.lineWidth = 3;
       ctx.beginPath();
       for (const [a, b] of FALLBACK_HAND_CONNECTIONS) {
@@ -455,66 +691,104 @@
       }
       ctx.stroke();
 
-      ctx.fillStyle = "#22c55e";
+      ctx.fillStyle = col.joint;
       for (const p of lm) {
         ctx.beginPath();
         ctx.arc(p.x * w, p.y * h, 3.5, 0, Math.PI * 2);
         ctx.fill();
       }
+      drawHandLabel(lm, side, col.text);
+    }
+
+    function sendLandmarks(side, coords) {
+      const now = Date.now();
+      if (wsPendingBy[side] && now - wsPendingSinceBy[side] > 2000) {
+        wsPendingBy[side] = false;   // 超时自解锁：某只手卡住不会堵死另一只手
+      }
+      if (ws && ws.readyState === WebSocket.OPEN && !wsPendingBy[side]) {
+        wsPendingBy[side] = true;
+        wsPendingSinceBy[side] = now;
+        ws.send(JSON.stringify({ landmarks: coords, hand: side }));
+      }
+    }
+
+    function resetHand(side) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: "reset", hand: side }));
+      }
+      lastPred[side] = null;
+      resetHandPanel(side);
     }
 
     function onHandResults(results) {
       if (!running) return;
-      ctx.save();
+      const lms = results.multiHandLandmarks || [];
+      const handed = results.multiHandedness || [];
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-        const lm = results.multiHandLandmarks[0];
-        drawHandSkeleton(lm);
+      const seen = { Left: false, Right: false };
+      let recordTarget = null;
+
+      for (let i = 0; i < lms.length; i++) {
+        // MediaPipe 的 handedness 按「自拍镜像」约定标注，画面未镜像时会与实际相反，
+        // 所以右侧留了「交换左右」勾选框，勾上即可整体翻转。
+        let side = (handed[i] && handed[i].label) || (i === 0 ? "Right" : "Left");
+        side = side === "Left" ? "Left" : "Right";
+        if (swapHandsEl && swapHandsEl.checked) side = side === "Left" ? "Right" : "Left";
+
+        seen[side] = true;
+        handMissFrames[side] = 0;
+
+        const lm = lms[i];
+        drawHandSkeleton(lm, side);
 
         const coords = lm.map(p => [p.x, p.y, p.z]);
-        if (recording) {
-          recordedFrames.push(coords);
-        }
-        const now = Date.now();
-        if (wsPending && now - wsPendingSince > 2000) {
-          wsPending = false;
-        }
-        if (ws && ws.readyState === WebSocket.OPEN && !wsPending) {
-          wsPending = true;
-          wsPendingSince = now;
-          ws.send(JSON.stringify({ landmarks: coords }));
-        }
-        camStatus.textContent = recording
-          ? `● 正在录制 [${labelInput.value}] (${recordedFrames.length} 帧)`
-          : "已检测到手部 (21 关键点)";
-      } else {
-        camStatus.textContent = "未检测到手部";
+        if (!recordTarget) recordTarget = { side, coords };
+        sendLandmarks(side, coords);
       }
-      ctx.restore();
+
+      // 某只手离开画面超过 25 帧，清空它自己的滑动窗口，避免再次出现时接上旧数据
+      for (const side of ["Left", "Right"]) {
+        if (!seen[side]) {
+          handMissFrames[side] += 1;
+          if (handMissFrames[side] === 25) resetHand(side);
+        }
+      }
+
+      if (recording && recordTarget) {
+        // 录制只取一只手：训练样本必须是单手 (3, T, 21) 序列
+        recordedFrames.push(recordTarget.coords);
+        recordingSide = recordTarget.side === "Left" ? "左手" : "右手";
+      }
+
+      const found = [];
+      if (seen.Left) found.push("左手");
+      if (seen.Right) found.push("右手");
+      if (found.length === 0) {
+        camStatus.textContent = "未检测到手部";
+      } else {
+        camStatus.textContent = recording
+          ? `● 正在录制 [${zhLabel(labelInput.value)}]（${recordingSide}，${recordedFrames.length} 帧）`
+          : `已检测到：${found.join(" + ")}（各 21 关键点）`;
+      }
     }
 
     async function ensureHandsReady() {
       if (typeof Hands === "undefined") {
-        throw new Error("本地 MediaPipe Hands 脚本未能加载（请刷新页面或检查 /static/mediapipe/hands/hands.js）");
+        throw new Error("本地手部追踪脚本未能加载（请刷新页面或检查 static/mediapipe/hands/hands.js）");
       }
       if (!hands) {
         hands = new Hands({
           locateFile: (file) => `/static/mediapipe/hands/${file}`
         });
-        hands.setOptions({
-          maxNumHands: 1,
-          modelComplexity: 0,
-          minDetectionConfidence: 0.6,
-          minTrackingConfidence: 0.55
-        });
+        applyHandOptions();      // 双手 + 高精度档（右侧面板可一键切回轻量）
         hands.onResults(onHandResults);
       }
       if (!handsReady && typeof hands.initialize === "function") {
         await withTimeout(
           hands.initialize(),
           20000,
-          "本地 MediaPipe 模型初始化超时"
+          "本地手部追踪模型初始化超时"
         );
         handsReady = true;
       }
@@ -588,7 +862,9 @@
         try { ws.close(); } catch (_) {}
         ws = null;
       }
-      wsPending = false;
+      wsPendingBy = { Left: false, Right: false };
+      wsPendingSinceBy = { Left: 0, Right: 0 };
+      resetAllHandPanels();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       btnStart.disabled = false;
       btnStop.disabled = true;
@@ -734,12 +1010,12 @@
         if (!openResult.ok || sessionId !== activeSessionId) return;
 
         camStatus.textContent = "正在加载手部追踪模型...";
-        logMsg("步骤 2/3：摄像头已开启，正在加载 MediaPipe 手部追踪模型（首次约需数秒）...");
+        logMsg("步骤 2/3：摄像头已开启，正在加载手部追踪模型（首次约需数秒）...");
         await ensureHandsReady();
         if (sessionId !== activeSessionId) return;
 
         camStatus.textContent = "正在连接后端推理...";
-        logMsg("步骤 3/3：正在连接后端 PyTorch 模型...");
+        logMsg("步骤 3/3：正在连接后端推理模型...");
         connectWS();
 
         running = true;
@@ -763,17 +1039,19 @@
     btnReset.onclick = () => {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ action: "reset" }));
+        resetAllHandPanels();
         logMsg("已重置后端滑动窗口与平滑状态。");
       }
     };
 
     btnRecord.onclick = async () => {
-      const label = labelInput.value.trim();
-      if (!label) { logMsg("请先输入手势名称！"); return; }
+      const raw = labelInput.value.trim();
+      if (!raw) { logMsg("请先输入手势名称！"); return; }
+      const label = toInternalLabel(raw);
       btnRecord.disabled = true;
       recordedFrames = [];
       recording = true;
-      logMsg(`正在录制 [${label}]，请保持或做出该手势 (1.2 秒)...`);
+      logMsg(`正在录制 [${raw}]，请保持或做出该手势（1.2 秒）...`);
 
       setTimeout(async () => {
         recording = false;
@@ -793,14 +1071,14 @@
         } else {
           recordedCounts = data.recorded_counts;
           renderChips();
-          logMsg(`已保存 [${label}] 样本 #${data.count}（捕获 ${recordedFrames.length} 帧）。`);
+          logMsg(`已保存 [${raw}] 样本第 ${data.count} 条（捕获 ${recordedFrames.length} 帧）。`);
         }
       }, 1200);
     };
 
     btnTrain.onclick = async () => {
       btnTrain.disabled = true;
-      logMsg("正在使用真实录制样本训练 UnifiedGestureGCN（含数据增强）...");
+      logMsg("正在使用真实录制样本训练手势模型（含数据增强）...");
       try {
         const res = await fetch("/api/train", {
           method: "POST",
@@ -812,7 +1090,8 @@
           logMsg("训练失败: " + data.detail);
         } else {
           await fetchStatus();
-          logMsg(`训练完成并已热加载！类别: [${data.labels.join(", ")}] | 训练集准确率: ${(data.train_acc * 100).toFixed(1)}%`);
+          const zhNames = data.labels.map(zhLabel).join("、");
+          logMsg(`训练完成并已热加载！类别: ${zhNames} | 训练集准确率: ${(data.train_acc * 100).toFixed(1)}%`);
         }
       } finally {
         btnTrain.disabled = false;

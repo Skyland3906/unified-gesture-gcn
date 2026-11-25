@@ -172,49 +172,87 @@ def create_app(
             "params_m": round(model.count_parameters() / 1e6, 3),
         }
 
-    def _run_predict(seq: torch.Tensor) -> Any:
+    def _run_predict(recognizer: Any, seq: torch.Tensor) -> Any:
         with state.infer_lock:
-            return state.recognizer.predict(seq)
+            return recognizer.predict(seq)
 
     @app.websocket("/ws/predict")
     async def ws_predict(websocket: WebSocket) -> None:
         await websocket.accept()
-        buf = SlidingWindowBuffer(
-            seq_len=state.cfg.data.seq_len,
-            num_joints=state.spec.num_joints,
-        )
+        hands = ("Left", "Right")
+        bufs: dict[str, SlidingWindowBuffer] = {
+            hand: SlidingWindowBuffer(
+                seq_len=state.cfg.data.seq_len,
+                num_joints=state.spec.num_joints,
+            )
+            for hand in hands
+        }
+        # 每只手一份 recognizer：共享同一份模型权重，但 EMA 平滑各自独立，
+        # 否则两只手的结果会在同一个平滑缓存里互相污染。
+        recs: dict[str, tuple[Any, Any]] = {}
+
+        def recognizer_for(hand: str) -> Any:
+            base = state.recognizer
+            cached = recs.get(hand)
+            if cached is None or cached[0] is not base:
+                rec = GestureRecognizer(
+                    model=base.model,
+                    preprocessor=base.preprocessor,
+                    labels=base.labels,
+                    device=base.device,
+                    ema_alpha=base.ema_alpha,
+                    dynamic_threshold=base.dynamic_threshold,
+                )
+                recs[hand] = (base, rec)
+            return recs[hand][1]
+
+        def reset_hand(hand: str | None) -> None:
+            targets = hands if hand is None else (hand,)
+            for name in targets:
+                if name in bufs:
+                    bufs[name].clear()
+                cached = recs.get(name)
+                if cached is not None:
+                    cached[1].reset_smoothing()
+            if hand is None:
+                with state.infer_lock:
+                    state.recognizer.reset_smoothing()
+
         try:
             while True:
                 msg = await websocket.receive_json()
                 action = msg.get("action")
                 if action == "reset":
-                    buf.clear()
-                    with state.infer_lock:
-                        state.recognizer.reset_smoothing()
-                    await websocket.send_json({"status": "reset"})
+                    reset_hand(msg.get("hand"))
+                    await websocket.send_json({"status": "reset", "hand": msg.get("hand")})
                     continue
 
                 landmarks = msg.get("landmarks")
                 if not landmarks:
                     continue
 
+                hand = str(msg.get("hand") or "Right")
+                if hand not in bufs:
+                    hand = "Right"
+
                 try:
-                    buf.push(landmarks)
-                    seq = buf.get_sequence()
-                    pred = await asyncio.to_thread(_run_predict, seq)
+                    bufs[hand].push(landmarks)
+                    seq = bufs[hand].get_sequence()
+                    pred = await asyncio.to_thread(_run_predict, recognizer_for(hand), seq)
                 except ValueError as exc:
-                    await websocket.send_json({"error": str(exc)})
+                    await websocket.send_json({"error": str(exc), "hand": hand})
                     continue
 
                 await websocket.send_json(
                     {
+                        "hand": hand,
                         "label": pred.label,
                         "confidence": round(pred.confidence, 4),
                         "probabilities": pred.probabilities,
                         "motion_energy": pred.motion_energy,
                         "is_dynamic": pred.is_dynamic,
                         "latency_ms": pred.latency_ms,
-                        "buffer_fill": len(buf) / buf.seq_len,
+                        "buffer_fill": len(bufs[hand]) / bufs[hand].seq_len,
                     }
                 )
         except WebSocketDisconnect:
