@@ -17,19 +17,34 @@ from gesture_gcn.models.network import UnifiedGestureGCN
 
 
 def _augment_raw_sequence(seq: torch.Tensor, gen: torch.Generator) -> torch.Tensor:
-    """Apply lightweight 3D rotation, scale, and jitter augmentation to a (3, T, N) clip."""
-    # Random Z-axis (in-plane) rotation within [-15, 15] degrees
-    angle = (torch.rand((), generator=gen).item() * 2.0 - 1.0) * math.radians(15.0)
+    """Apply direction-preserving 3D rotation, scale, translation, mild time-warp, and jitter."""
+    # Mild Z-axis rotation within [-10, 10] degrees (keeps left/right/up/down cleanly separated)
+    angle = (torch.rand((), generator=gen).item() * 2.0 - 1.0) * math.radians(10.0)
     cos_a, sin_a = math.cos(angle), math.sin(angle)
     rot = torch.tensor(
         [[cos_a, -sin_a, 0.0], [sin_a, cos_a, 0.0], [0.0, 0.0, 1.0]],
         dtype=torch.float32,
     )
-    # seq: (3, T, N) -> apply rot along dim 0
     rotated = torch.einsum("ij,jtn->itn", rot, seq)
-    scale = 0.85 + 0.30 * torch.rand((), generator=gen).item()
-    jitter = torch.randn(seq.shape, generator=gen) * 0.005
-    return rotated * scale + jitter
+
+    # Mild temporal trim/speed warp (85%~100% of clip resampled back to T)
+    t_len = int(seq.shape[1])
+    if t_len >= 12 and torch.rand((), generator=gen).item() < 0.5:
+        keep = max(8, int(round(t_len * (0.85 + 0.15 * torch.rand((), generator=gen).item()))))
+        max_start = max(0, t_len - keep)
+        start = int(torch.randint(0, max_start + 1, (), generator=gen).item()) if max_start > 0 else 0
+        cropped = rotated[:, start : start + keep, :]
+        rotated = torch.nn.functional.interpolate(
+            cropped.unsqueeze(0),
+            size=(t_len, seq.shape[2]),
+            mode="bilinear",
+            align_corners=False,
+        ).squeeze(0)
+
+    scale = 0.88 + 0.24 * torch.rand((), generator=gen).item()
+    shift = (torch.rand((3, 1, 1), generator=gen) * 2.0 - 1.0) * 0.06
+    jitter = torch.randn(seq.shape, generator=gen) * 0.004
+    return rotated * scale + shift + jitter
 
 
 class _RecordedClipDataset(Dataset[tuple[torch.Tensor, torch.Tensor, int]]):
@@ -43,10 +58,21 @@ class _RecordedClipDataset(Dataset[tuple[torch.Tensor, torch.Tensor, int]]):
         self.preprocessor = preprocessor
         self.items: list[tuple[torch.Tensor, int]] = []
         gen = torch.Generator().manual_seed(seed)
+
+        # Class-balanced augmentation so newly recorded 2~3 clip classes aren't drowned out
+        by_label: dict[int, list[torch.Tensor]] = {}
         for seq, label in clips:
-            self.items.append((seq, label))
-            for _ in range(augment_factor):
-                self.items.append((_augment_raw_sequence(seq, gen), label))
+            by_label.setdefault(label, []).append(seq)
+        max_clips = max((len(v) for v in by_label.values()), default=1)
+        target_per_class = min(48, max(24, max_clips * (augment_factor + 1)))
+
+        for label, seqs in by_label.items():
+            for seq in seqs:
+                self.items.append((seq, label))
+            needed = max(0, target_per_class - len(seqs))
+            for i in range(needed):
+                base_seq = seqs[i % len(seqs)]
+                self.items.append((_augment_raw_sequence(base_seq, gen), label))
 
     def __len__(self) -> int:
         return len(self.items)
@@ -108,6 +134,14 @@ class CustomGestureStore:
     def counts(self) -> dict[str, int]:
         return {k: len(v) for k, v in self._clips_by_label.items()}
 
+    def delete_label(self, label: str) -> bool:
+        label = label.strip()
+        if label in self._clips_by_label:
+            del self._clips_by_label[label]
+            self._save()
+            return True
+        return False
+
     def clear(self) -> None:
         self._clips_by_label.clear()
         if self.store_path.exists():
@@ -135,8 +169,9 @@ class CustomGestureStore:
             spec=spec,
             use_bone_fusion=data_cfg.use_bone_fusion,
             scale_floor=data_cfg.norm_scale_floor,
+            use_velocity=data_cfg.use_velocity,
         )
-        dataset = _RecordedClipDataset(clips, preprocessor, augment_factor=10)
+        dataset = _RecordedClipDataset(clips, preprocessor, augment_factor=8)
         loader = DataLoader(dataset, batch_size=min(16, len(dataset)), shuffle=True)
 
         cfg_dict = base_model_cfg.model_dump()
@@ -144,7 +179,13 @@ class CustomGestureStore:
         model_cfg = ModelConfig.model_validate(cfg_dict)
         model = UnifiedGestureGCN(cfg=model_cfg, spec=spec, in_channels=preprocessor.out_channels)
 
-        train_cfg = TrainConfig(epochs=epochs, lr=4e-3, weight_decay=5e-4, log_interval=6)
+        train_cfg = TrainConfig(
+            epochs=epochs,
+            lr=3e-3,
+            weight_decay=8e-4,
+            label_smoothing=0.08,
+            log_interval=6,
+        )
         trainer = Trainer(model=model, cfg=train_cfg, device=device)
         history = trainer.fit(loader, loader)
         final_acc = history[-1].train_acc

@@ -13,6 +13,7 @@ class DataConfig(BaseModel):
     skeleton_type: Literal["mediapipe_21", "shrec_22"] = "mediapipe_21"
     seq_len: int = Field(default=48, ge=8)
     use_bone_fusion: bool = True
+    use_velocity: bool = False
     norm_scale_floor: float = Field(default=0.05, gt=0.0)
     num_samples_per_class: int = Field(default=40, ge=4)
     val_ratio: float = Field(default=0.25, gt=0.0, lt=1.0)
@@ -46,13 +47,14 @@ class TrainConfig(BaseModel):
     epochs: int = Field(default=12, ge=1)
     lr: float = Field(default=3e-3, gt=0.0)
     weight_decay: float = Field(default=5e-4, ge=0.0)
+    label_smoothing: float = Field(default=0.0, ge=0.0, lt=0.5)
     log_interval: int = Field(default=2, ge=1)
 
 
 class ExperimentConfig(BaseModel):
     experiment_name: str = "unified_gesture_demo"
     seed: int = 42
-    device: Literal["auto", "cpu", "cuda"] = "auto"
+    device: Literal["auto", "cpu", "cuda", "mps"] = "auto"
     data: DataConfig = Field(default_factory=DataConfig)
     model: ModelConfig = Field(default_factory=ModelConfig)
     train: TrainConfig = Field(default_factory=TrainConfig)

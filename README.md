@@ -31,15 +31,19 @@
 
 ---
 
-## 快速开始（本地运行）
+## 快速开始（本地运行：Windows / macOS / Linux）
 
 推荐使用 Python 3.10–3.12：
 
 ```bash
-# 1. 创建虚拟环境并安装 PyTorch (CPU 版示例；如有 GPU 可装对应 CUDA 版)
-python -m venv .venv
+# 1. 创建虚拟环境并安装 PyTorch
+python3 -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+# macOS（Intel & Apple Silicon M1–M4，自动支持 MPS 加速）：
+pip install torch
+# Windows / Linux（CPU 版示例；如有 NVIDIA GPU 可装对应 CUDA 版）：
+# pip install torch --index-url https://download.pytorch.org/whl/cpu
 
 # 2. 安装本项目及 Web/测试依赖
 pip install -e ".[web,dev]"
@@ -51,8 +55,24 @@ python scripts/download_assets.py
 pytest -v
 
 # 5. 启动实时摄像头手势识别 Web Studio
-python scripts/run_web.py --host 0.0.0.0 --port 8000
+python scripts/run_web.py --host 127.0.0.1 --port 8000
+# 或一键启动：
+#   macOS / Linux: bash start_web.sh
+#   Windows:       双击 start_web.bat
 ```
+
+### 手势操控电脑客户端（Windows / macOS 跨平台）
+
+在 Web Studio 运行后，可在新终端启动独立的手势控电脑客户端（默认支持 PPT/Keynote 翻页、缩放、放映开关等，规则见 `configs/pc_control.yaml`）：
+
+```bash
+# macOS / Linux:
+bash start_pc_controller.sh
+# Windows:
+# 双击 start_pc_controller.bat 或运行 python scripts/pc_controller.py
+```
+
+> **macOS 权限提示**：首次运行手势控电脑客户端时，需要前往 **系统设置 -> 隐私与安全性 -> 辅助功能**，为当前使用的终端（如 Terminal / iTerm2 / VS Code）开启权限后重启终端，CoreGraphics 模拟按键才会生效。可先用 `python scripts/pc_controller.py --dry-run` 验证事件连通性。
 
 浏览器打开 **`http://localhost:8000`** 即可：
 - 实时 21 点 3D 手部骨架追踪 + `UnifiedGestureGCN` 推理 + DRE 动/静态能量指示；

@@ -36,15 +36,20 @@ class SkeletonPreprocessor:
         spec: HandSkeletonSpec,
         use_bone_fusion: bool = True,
         scale_floor: float = 0.05,
+        use_velocity: bool = False,
     ) -> None:
         self.spec = spec
         self.use_bone_fusion = use_bone_fusion
+        self.use_velocity = use_velocity
         self.scale_floor = scale_floor
         self._parent_idx = torch.tensor(spec.parents, dtype=torch.long)
 
     @property
     def out_channels(self) -> int:
-        return 6 if self.use_bone_fusion else 3
+        ch = 6 if self.use_bone_fusion else 3
+        if self.use_velocity:
+            ch += 3
+        return ch
 
     def __call__(self, raw_seq: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Process a single raw sequence of shape (3, T, N).
@@ -74,11 +79,18 @@ class SkeletonPreprocessor:
         scale = torch.clamp(spatial_span, min=self.scale_floor)
         norm_joints = centered / scale
 
-        if not self.use_bone_fusion:
-            return norm_joints, dynamic_range
+        parts: list[torch.Tensor] = [norm_joints]
+        if self.use_bone_fusion:
+            # 3. Bone vectors: child - parent (3, T, N)
+            parent_coords = norm_joints.index_select(dim=2, index=self._parent_idx.to(raw_seq.device))
+            bones = norm_joints - parent_coords
+            parts.append(bones)
 
-        # 3. Bone vectors: child - parent (3, T, N)
-        parent_coords = norm_joints.index_select(dim=2, index=self._parent_idx.to(raw_seq.device))
-        bones = norm_joints - parent_coords
-        features = torch.cat([norm_joints, bones], dim=0)
+        if self.use_velocity:
+            # 4. Signed temporal velocity (preserves left vs right, up vs down, push vs pull)
+            vel = torch.zeros_like(norm_joints)
+            vel[:, 1:] = (norm_joints[:, 1:] - norm_joints[:, :-1]) * 4.0
+            parts.append(vel)
+
+        features = parts[0] if len(parts) == 1 else torch.cat(parts, dim=0)
         return features, dynamic_range

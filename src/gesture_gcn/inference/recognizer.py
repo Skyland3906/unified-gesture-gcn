@@ -15,6 +15,16 @@ from gesture_gcn.data.transforms import SkeletonPreprocessor
 from gesture_gcn.models.network import UnifiedGestureGCN
 
 
+OPPOSITE_GESTURES: dict[str, str] = {
+    "dynamic_swipe_right": "dynamic_swipe_left",
+    "dynamic_swipe_left": "dynamic_swipe_right",
+    "dynamic_swipe_up": "dynamic_swipe_down",
+    "dynamic_swipe_down": "dynamic_swipe_up",
+    "dynamic_push": "dynamic_pull",
+    "dynamic_pull": "dynamic_push",
+}
+
+
 @dataclass(frozen=True)
 class PredictionResult:
     label: str
@@ -38,6 +48,7 @@ class GestureRecognizer:
         ema_fast_alpha: float = 0.72,
         dynamic_threshold: float = 0.08,
         optimize_inference: bool = True,
+        use_kinematic_prior: bool = True,
     ) -> None:
         self.model = model.to(device).eval()
         self.preprocessor = preprocessor
@@ -47,7 +58,9 @@ class GestureRecognizer:
         self.ema_fast_alpha = max(ema_alpha, ema_fast_alpha)
         self.dynamic_threshold = dynamic_threshold
         self._ema_by_hand: dict[str, torch.Tensor] = {}
+        self._swipe_guard: dict[str, tuple[str, float, int]] = {}  # hand -> (label, ts, still_frames)
         self._optimize_inference = optimize_inference
+        self._use_kinematic_prior = use_kinematic_prior
         self._fast_runners: dict[int, torch.jit.ScriptModule] = {}
 
         # Small 0.6M-param GCNs suffer from OpenMP thread contention when PyTorch spawns many threads
@@ -57,12 +70,14 @@ class GestureRecognizer:
     def reset_smoothing(self, hand: str | None = None) -> None:
         if hand is None:
             self._ema_by_hand.clear()
+            self._swipe_guard.clear()
         else:
             self._ema_by_hand.pop(hand, None)
+            self._swipe_guard.pop(hand, None)
 
     def compile_for_inference(self, seq_len: int) -> bool:
         """Trace and optimize the model for a given temporal window length (supports dynamic batch size)."""
-        if not self._optimize_inference:
+        if not self._optimize_inference or self.device.type == "mps":
             return False
         if seq_len in self._fast_runners:
             return True
@@ -134,6 +149,100 @@ class GestureRecognizer:
         """Run inference on a single raw skeleton sequence of shape (3, T, N)."""
         return self.predict_batch({hand: raw_seq})[hand]
 
+    def _apply_kinematic_prior(
+        self,
+        raw_seq: torch.Tensor,
+        probs: torch.Tensor,
+        motion_energy: float,
+        hand: str | None = None,
+        now: float | None = None,
+    ) -> torch.Tensor:
+        """Enforce axis/direction isolation, suppress return strokes, and block phantom grabs."""
+        if not self._use_kinematic_prior or raw_seq.shape[2] != 21 or raw_seq.shape[1] < 4:
+            return probs
+
+        ts = time.perf_counter() if now is None else now
+        t_len = int(raw_seq.shape[1])
+        k = min(14, t_len)
+        # Recent ~0.5s wrist displacement (CSS-mirrored webcam: screen-left => dx>0, screen-right => dx<0)
+        dx = float((raw_seq[0, -1, 0] - raw_seq[0, -k, 0]).item())
+        dy = float((raw_seq[1, -1, 0] - raw_seq[1, -k, 0]).item())
+        abs_dx = abs(dx)
+        abs_dy = abs(dy)
+
+        # 2D palm scale (wrist 0 -> middle MCP 9)
+        palm_vecs = raw_seq[:2, :, 9] - raw_seq[:2, :, 0]  # (2, T)
+        palm_scales = torch.linalg.norm(palm_vecs, dim=0).clamp(min=1e-4)  # (T,)
+        s_recent = float(palm_scales[-k].item())
+        s_end = float(palm_scales[-1].item())
+        ds = (s_end - s_recent) / max(s_recent, 0.05)
+
+        # Finger openness: average distance from fingertips (8,12,16,20) to wrist (0) / palm_scale
+        tips = raw_seq[:2, :, (8, 12, 16, 20)] - raw_seq[:2, :, 0:1]  # (2, T, 4)
+        open_curve = torch.linalg.norm(tips, dim=0).mean(dim=1) / palm_scales  # (T,)
+        open_start_full = float(open_curve[: min(3, t_len)].mean().item())
+        open_start_recent = float(open_curve[-k].item())
+        open_end = float(open_curve[-min(2, t_len) :].mean().item())
+        max_close_drop = max(open_start_full - open_end, open_start_recent - open_end)
+
+        # Check active return-stroke guard for this hand (clears quickly after a brief stationary pause)
+        suppressed_opposite: str | None = None
+        if hand is not None and hand in self._swipe_guard:
+            prev_lbl, prev_ts, still_cnt = self._swipe_guard[hand]
+            if (ts - prev_ts) > 1.35:
+                self._swipe_guard.pop(hand, None)
+            elif motion_energy < 0.05:
+                still_cnt += 1
+                if still_cnt >= 5:
+                    self._swipe_guard.pop(hand, None)
+                else:
+                    self._swipe_guard[hand] = (prev_lbl, prev_ts, still_cnt)
+                    suppressed_opposite = OPPOSITE_GESTURES.get(prev_lbl)
+            else:
+                self._swipe_guard[hand] = (prev_lbl, prev_ts, 0)
+                suppressed_opposite = OPPOSITE_GESTURES.get(prev_lbl)
+
+        weights = torch.ones_like(probs)
+        for i, lbl in enumerate(self.labels):
+            if lbl == "dynamic_swipe_right":
+                # Require genuine screen-right displacement (dx <= -0.08) and horizontal dominance
+                if dx > -0.08 or abs_dx < 1.25 * abs_dy:
+                    weights[i] *= 0.10
+            elif lbl == "dynamic_swipe_left":
+                # Require genuine screen-left displacement (dx >= +0.08) and horizontal dominance
+                if dx < 0.08 or abs_dx < 1.25 * abs_dy:
+                    weights[i] *= 0.10
+            elif lbl == "dynamic_swipe_up":
+                # Require genuine upward displacement (dy <= -0.08) and vertical dominance
+                if dy > -0.08 or abs_dy < 1.25 * abs_dx:
+                    weights[i] *= 0.10
+            elif lbl == "dynamic_swipe_down":
+                # Require genuine downward displacement (dy >= +0.08) and vertical dominance
+                if dy < 0.08 or abs_dy < 1.25 * abs_dx:
+                    weights[i] *= 0.10
+            elif lbl == "dynamic_push":
+                if ds < 0.06:
+                    weights[i] *= 0.15
+            elif lbl == "dynamic_pull":
+                if ds > -0.06:
+                    weights[i] *= 0.15
+            elif lbl == "dynamic_grab_close":
+                # Genuine grab must actually close fingers and end relatively closed
+                if open_end > 1.50 or max_close_drop < 0.14:
+                    weights[i] *= 0.12
+
+            # Return-stroke suppression: damp opposite direction immediately after a swipe/push/pull
+            if suppressed_opposite is not None and lbl == suppressed_opposite:
+                weights[i] *= 0.06
+
+            # Suppress dynamic labels when hand is practically stationary
+            if lbl.startswith("dynamic_") and motion_energy < 0.055 and max_close_drop < 0.18:
+                weights[i] *= 0.30
+
+        adjusted = probs * weights
+        denom = float(adjusted.sum().item())
+        return adjusted / denom if denom > 1e-8 else probs
+
     @torch.inference_mode()
     def predict_batch(self, seqs_by_hand: dict[str, torch.Tensor]) -> dict[str, PredictionResult]:
         """Run one batched forward pass for 1 or more hands (e.g. Left + Right -> Batch=2)."""
@@ -156,12 +265,23 @@ class GestureRecognizer:
 
         logits = self._forward(x, dr_batch)
         probs_batch = torch.softmax(logits, dim=-1).cpu()
-        latency_ms = (time.perf_counter() - start) * 1000.0
+        now = time.perf_counter()
+        latency_ms = (now - start) * 1000.0
 
         results: dict[str, PredictionResult] = {}
         for i, hand in enumerate(hand_names):
-            smoothed = self._update_ema(hand, probs_batch[i])
-            results[hand] = self._format_result(smoothed, energies[i], latency_ms)
+            refined = self._apply_kinematic_prior(
+                seqs_by_hand[hand],
+                probs_batch[i],
+                energies[i],
+                hand=hand,
+                now=now,
+            )
+            smoothed = self._update_ema(hand, refined)
+            res = self._format_result(smoothed, energies[i], latency_ms)
+            if res.label in OPPOSITE_GESTURES and res.confidence >= 0.58:
+                self._swipe_guard[hand] = (res.label, now, 0)
+            results[hand] = res
         return results
 
     def save_checkpoint(self, path: str | Path, data_cfg: DataConfig) -> Path:
@@ -190,10 +310,13 @@ class GestureRecognizer:
         in_channels: int = int(payload["in_channels"])
 
         spec: HandSkeletonSpec = get_skeleton_spec(data_cfg.skeleton_type)
+        base_ch = 6 if data_cfg.use_bone_fusion else 3
+        use_velocity = data_cfg.use_velocity or (in_channels == base_ch + 3)
         preprocessor = SkeletonPreprocessor(
             spec=spec,
             use_bone_fusion=data_cfg.use_bone_fusion,
             scale_floor=data_cfg.norm_scale_floor,
+            use_velocity=use_velocity,
         )
         model = UnifiedGestureGCN(cfg=model_cfg, spec=spec, in_channels=in_channels)
         model.load_state_dict(payload["model_state"])

@@ -23,7 +23,11 @@ class EpochMetrics:
 
 def resolve_device(requested: str = "auto") -> torch.device:
     if requested == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
     return torch.device(requested)
 
 
@@ -39,7 +43,7 @@ class Trainer:
         self.model = model.to(device)
         self.cfg = cfg
         self.device = device
-        self.criterion = nn.CrossEntropyLoss()
+        self.criterion = nn.CrossEntropyLoss(label_smoothing=cfg.label_smoothing)
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=cfg.lr,
@@ -127,10 +131,14 @@ def benchmark_inference(
 
     if device.type == "cuda":
         torch.cuda.synchronize()
+    elif device.type == "mps" and hasattr(torch, "mps"):
+        torch.mps.synchronize()
     start = time.perf_counter()
     for _ in range(runs):
         _ = model(dummy_x, dummy_dr)
     if device.type == "cuda":
         torch.cuda.synchronize()
+    elif device.type == "mps" and hasattr(torch, "mps"):
+        torch.mps.synchronize()
     elapsed_ms = (time.perf_counter() - start) * 1000.0 / runs
     return elapsed_ms

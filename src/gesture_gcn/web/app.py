@@ -19,6 +19,12 @@ from gesture_gcn.data.synthetic import GESTURE_LABELS, build_synthetic_dataloade
 from gesture_gcn.data.transforms import SkeletonPreprocessor
 from gesture_gcn.engine.trainer import Trainer, resolve_device
 from gesture_gcn.inference.buffer import SlidingWindowBuffer
+from gesture_gcn.inference.events import (
+    PRESET_GESTURES,
+    ControlConfig,
+    EventBroadcaster,
+    GestureEventEngine,
+)
 from gesture_gcn.inference.recognizer import GestureRecognizer
 from gesture_gcn.inference.recorder import CustomGestureStore
 from gesture_gcn.models.network import UnifiedGestureGCN
@@ -53,6 +59,8 @@ class _AppState:
         )
         self.recognizer = self._load_or_bootstrap_recognizer()
         self.infer_lock = threading.Lock()
+        self.event_engine = GestureEventEngine()
+        self.broadcaster = EventBroadcaster()
 
     def _load_or_bootstrap_recognizer(self) -> GestureRecognizer:
         if self.checkpoint_path.exists():
@@ -72,6 +80,7 @@ class _AppState:
             spec=spec,
             use_bone_fusion=self.cfg.data.use_bone_fusion,
             scale_floor=self.cfg.data.norm_scale_floor,
+            use_velocity=self.cfg.data.use_velocity,
         )
         recognizer = GestureRecognizer(
             model=model,
@@ -120,7 +129,57 @@ def create_app(
             "params_m": round(state.recognizer.model.count_parameters() / 1e6, 3),
             "labels": state.recognizer.labels,
             "recorded_counts": state.store.counts(),
+            "control": {
+                **state.event_engine.config.model_dump(),
+                "subscribers": state.broadcaster.subscriber_count,
+            },
         }
+
+    @app.get("/api/gestures")
+    async def list_gestures() -> dict[str, Any]:
+        return {
+            "presets": PRESET_GESTURES,
+            "active_labels": state.recognizer.labels,
+            "recorded_counts": state.store.counts(),
+        }
+
+    @app.get("/api/control/config")
+    async def get_control_config() -> dict[str, Any]:
+        return {
+            **state.event_engine.config.model_dump(),
+            "subscribers": state.broadcaster.subscriber_count,
+        }
+
+    @app.post("/api/control/config")
+    async def update_control_config(cfg_req: ControlConfig) -> dict[str, Any]:
+        updated = state.event_engine.update_config(cfg_req)
+        payload = {
+            **updated.model_dump(),
+            "subscribers": state.broadcaster.subscriber_count,
+        }
+        await state.broadcaster.broadcast({"event": "config_updated", "config": updated.model_dump()})
+        return payload
+
+    @app.websocket("/ws/events")
+    async def ws_events(websocket: WebSocket) -> None:
+        """Public event stream API for decoupled OS controllers (e.g. Windows pc_controller.py)."""
+        await state.broadcaster.connect(websocket)
+        try:
+            await websocket.send_json(
+                {
+                    "event": "connected",
+                    "labels": state.recognizer.labels,
+                    "config": state.event_engine.config.model_dump(),
+                }
+            )
+            while True:
+                msg = await websocket.receive_json()
+                if msg.get("action") == "ping":
+                    await websocket.send_json({"event": "pong"})
+        except WebSocketDisconnect:
+            return
+        finally:
+            state.broadcaster.disconnect(websocket)
 
     @app.post("/api/samples")
     async def add_sample(req: RecordSampleRequest) -> dict[str, Any]:
@@ -138,6 +197,11 @@ def create_app(
     async def clear_samples() -> dict[str, Any]:
         state.store.clear()
         return {"recorded_counts": {}}
+
+    @app.delete("/api/samples/{label}")
+    async def delete_label_samples(label: str) -> dict[str, Any]:
+        state.store.delete_label(label)
+        return {"deleted": label, "recorded_counts": state.store.counts()}
 
     @app.post("/api/train")
     async def train_custom(req: TrainRequest) -> dict[str, Any]:
@@ -157,6 +221,7 @@ def create_app(
             spec=state.spec,
             use_bone_fusion=state.cfg.data.use_bone_fusion,
             scale_floor=state.cfg.data.norm_scale_floor,
+            use_velocity=state.cfg.data.use_velocity,
         )
         new_recognizer = GestureRecognizer(
             model=model,
@@ -201,9 +266,14 @@ def create_app(
                     if name in bufs:
                         bufs[name].clear()
                         state.recognizer.reset_smoothing(hand_key(name))
+                    state.event_engine.reset(name)
 
-        def serialize_pred(hand: str, pred: Any) -> dict[str, Any]:
-            return {
+        def serialize_pred(
+            hand: str,
+            pred: Any,
+            triggered_event: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            out: dict[str, Any] = {
                 "hand": hand,
                 "label": pred.label,
                 "confidence": round(pred.confidence, 4),
@@ -213,6 +283,9 @@ def create_app(
                 "latency_ms": pred.latency_ms,
                 "buffer_fill": len(bufs[hand]) / bufs[hand].seq_len,
             }
+            if triggered_event is not None:
+                out["triggered_event"] = triggered_event
+            return out
 
         try:
             while True:
@@ -229,7 +302,12 @@ def create_app(
                     seqs_by_key: dict[str, torch.Tensor] = {}
                     key_to_hand: dict[str, str] = {}
                     try:
-                        for raw_hand, lms in hands_payload.items():
+                        # Process Left before Right so optional Left-hand safety lock sees fresh Left state
+                        ordered_items = sorted(
+                            hands_payload.items(),
+                            key=lambda kv: 0 if kv[0] == "Left" else 1,
+                        )
+                        for raw_hand, lms in ordered_items:
                             if not lms:
                                 continue
                             hand = "Left" if raw_hand == "Left" else "Right"
@@ -245,11 +323,24 @@ def create_app(
                         continue
 
                     preds = await asyncio.to_thread(_run_predict_batch, seqs_by_key)
-                    results = {
-                        key_to_hand[k]: serialize_pred(key_to_hand[k], pred)
-                        for k, pred in preds.items()
-                    }
-                    await websocket.send_json({"results": results})
+                    results: dict[str, Any] = {}
+                    fired_events: list[dict[str, Any]] = []
+                    for k, pred in preds.items():
+                        hand = key_to_hand[k]
+                        evt = state.event_engine.process(hand, pred)
+                        if evt is not None:
+                            fired_events.append(evt)
+                        results[hand] = serialize_pred(hand, pred, triggered_event=evt)
+
+                    for evt in fired_events:
+                        await state.broadcaster.broadcast(evt)
+
+                    await websocket.send_json(
+                        {
+                            "results": results,
+                            "subscribers": state.broadcaster.subscriber_count,
+                        }
+                    )
                     continue
 
                 # Backwards-compatible single-hand protocol: {"landmarks": [[...]], "hand": "Right"}
@@ -266,7 +357,10 @@ def create_app(
                     await websocket.send_json({"error": str(exc), "hand": hand})
                     continue
 
-                await websocket.send_json(serialize_pred(hand, preds[k]))
+                evt = state.event_engine.process(hand, preds[k])
+                if evt is not None:
+                    await state.broadcaster.broadcast(evt)
+                await websocket.send_json(serialize_pred(hand, preds[k], triggered_event=evt))
         except WebSocketDisconnect:
             return
         finally:

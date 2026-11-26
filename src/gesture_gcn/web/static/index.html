@@ -35,6 +35,60 @@
       position: relative; width: 100%; aspect-ratio: 4/3;
       background: #020617; border-radius: 10px; overflow: hidden;
     }
+    .stage::after {
+      content: ""; position: absolute; inset: 0; border-radius: 10px;
+      pointer-events: none; z-index: 7; transition: box-shadow 0.15s ease;
+    }
+    .stage.rec-prep::after { box-shadow: inset 0 0 0 5px var(--amber), inset 0 0 28px rgba(245, 158, 11, 0.35); }
+    .stage.rec-live::after { box-shadow: inset 0 0 0 6px var(--red), inset 0 0 34px rgba(239, 68, 68, 0.45); animation: recPulse 0.7s ease-in-out infinite; }
+    .stage.rec-done::after { box-shadow: inset 0 0 0 5px var(--green), inset 0 0 24px rgba(34, 197, 94, 0.35); }
+    @keyframes recPulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.45; }
+    }
+    @keyframes countPop {
+      0% { transform: scale(1.35); opacity: 0.35; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    .rec-hud {
+      position: absolute; inset: 0; z-index: 8; pointer-events: none;
+      display: none; flex-direction: column; align-items: center; justify-content: center;
+      gap: 10px; background: rgba(2, 6, 23, 0.28); text-align: center; padding: 16px;
+    }
+    .rec-hud.show { display: flex; }
+    .rec-big {
+      font-size: 5.2rem; font-weight: 900; line-height: 1;
+      color: var(--amber); text-shadow: 0 4px 22px rgba(0, 0, 0, 0.85);
+      animation: countPop 0.22s ease-out;
+    }
+    .rec-big.done { font-size: 2.3rem; color: var(--green); }
+    .rec-big.warn { font-size: 2.1rem; color: var(--amber); }
+    .rec-sub {
+      background: rgba(15, 23, 42, 0.88); border: 1px solid rgba(255, 255, 255, 0.18);
+      padding: 6px 16px; border-radius: 999px; font-size: 0.96rem; font-weight: 700;
+      color: #fff; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+    }
+    .rec-pill {
+      position: absolute; top: 12px; right: 12px; z-index: 9; pointer-events: none;
+      display: none; align-items: center; gap: 7px;
+      background: rgba(220, 38, 38, 0.92); color: #fff;
+      padding: 6px 14px; border-radius: 999px; font-size: 0.9rem; font-weight: 800;
+      box-shadow: 0 2px 14px rgba(239, 68, 68, 0.55);
+    }
+    .rec-pill.show { display: inline-flex; }
+    .rec-dot {
+      width: 10px; height: 10px; border-radius: 50%; background: #fff;
+      animation: recPulse 0.6s ease-in-out infinite;
+    }
+    .rec-bar-wrap {
+      position: absolute; left: 0; right: 0; bottom: 0; height: 8px; z-index: 9;
+      background: rgba(15, 23, 42, 0.72); display: none; pointer-events: none;
+    }
+    .rec-bar-wrap.show { display: block; }
+    .rec-bar-fill {
+      height: 100%; width: 0%; background: linear-gradient(90deg, #f97316, #ef4444);
+      transition: width 0.05s linear;
+    }
     video, canvas {
       position: absolute; inset: 0; width: 100%; height: 100%;
       object-fit: cover; transform: scaleX(-1);
@@ -145,10 +199,16 @@
   <div class="grid">
     <!-- Left: Camera & Skeleton -->
     <div class="card">
-      <div class="stage">
+      <div class="stage" id="videoStage">
         <video id="video" autoplay playsinline muted></video>
         <canvas id="canvas" width="640" height="480"></canvas>
         <div class="overlay-badge" id="camStatus">摄像头未开启</div>
+        <div class="rec-pill" id="recPill"><span class="rec-dot"></span><span id="recPillText">REC 1.2s</span></div>
+        <div class="rec-hud" id="recHud">
+          <div class="rec-big" id="recBig">3</div>
+          <div class="rec-sub" id="recSub">准备录制</div>
+        </div>
+        <div class="rec-bar-wrap" id="recBarWrap"><div class="rec-bar-fill" id="recBarFill"></div></div>
       </div>
       <div class="row" style="margin-top:14px; margin-bottom:0;">
         <select id="cameraSelect">
@@ -214,18 +274,27 @@
         </div>
       </div>
 
+      <div class="options-bar" style="margin-bottom:0;">
+        <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+          <label><input type="checkbox" id="controlEnabled" checked /> 操控事件推送 (/ws/events)</label>
+          <label><input type="checkbox" id="requireLeftLock" /> 左手张掌安全锁</label>
+        </div>
+        <span id="controlStatus" style="color:var(--accent); font-weight:600;">操控端: 0 | 等待触发</span>
+      </div>
+
       <div class="section-title">录制真实手势并一键训练手势模型</div>
       <div class="meta" style="margin-bottom:8px;">
-        提示：每个手势录制 3~5 条真实样本（支持任意静态/动态手势），点击训练即可热更新模型权重。
+        提示：点击录制（或按 <b>空格键</b>）后有 1.5 秒准备倒计时，请先把手摆到起始位置再做动作；每类建议录 4~6 条。
       </div>
       <div class="chips" id="presetChips"></div>
       <div class="row">
-        <input type="text" id="labelInput" placeholder="输入或选择手势名称（如：握拳 / 点赞 / 向右挥）" value="张开手掌" />
-        <button id="btnRecord" class="secondary" disabled>录制 1.2 秒</button>
+        <input type="text" id="labelInput" placeholder="输入或选择手势名称（如：握拳 / 剪刀手 / 向下划）" value="张开手掌" />
+        <button id="btnRecord" class="secondary" disabled>倒计时录制 (空格)</button>
       </div>
       <div class="controls" style="margin-top:8px;">
         <button id="btnTrain" class="success">一键训练并热加载</button>
-        <button id="btnClear" class="danger">清空录制样本</button>
+        <button id="btnClearOne" class="secondary">清空当前类别</button>
+        <button id="btnClear" class="danger">清空全部样本</button>
       </div>
       <div class="log" id="statusLog">就绪。请点击左侧“开启摄像头实时识别”。</div>
     </div>
@@ -236,6 +305,14 @@
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
     const camStatus = document.getElementById("camStatus");
+    const videoStage = document.getElementById("videoStage");
+    const recHud = document.getElementById("recHud");
+    const recBig = document.getElementById("recBig");
+    const recSub = document.getElementById("recSub");
+    const recPill = document.getElementById("recPill");
+    const recPillText = document.getElementById("recPillText");
+    const recBarWrap = document.getElementById("recBarWrap");
+    const recBarFill = document.getElementById("recBarFill");
     const modelMeta = document.getElementById("modelMeta");
     const handUI = {
       Left: {
@@ -287,8 +364,8 @@
       hands.setOptions({
         maxNumHands: 2,                                  // 双手：同时追踪左右两只手
         modelComplexity: hq ? 1 : 0,                     // 1 更准（远距/小目标），0 更快
-        minDetectionConfidence: hq ? 0.65 : 0.55,
-        minTrackingConfidence: hq ? 0.60 : 0.50
+        minDetectionConfidence: hq ? 0.78 : 0.72,        // 提高检出阈值，抑制人脸/颈部误检
+        minTrackingConfidence: hq ? 0.68 : 0.62
       });
     }
     const labelInput = document.getElementById("labelInput");
@@ -300,9 +377,59 @@
     const btnReset = document.getElementById("btnReset");
     const btnRecord = document.getElementById("btnRecord");
     const btnTrain = document.getElementById("btnTrain");
+    const btnClearOne = document.getElementById("btnClearOne");
     const btnClear = document.getElementById("btnClear");
     const cameraSelect = document.getElementById("cameraSelect");
     const btnRefreshCams = document.getElementById("btnRefreshCams");
+    const controlEnabledEl = document.getElementById("controlEnabled");
+    const requireLeftLockEl = document.getElementById("requireLeftLock");
+    const controlStatusEl = document.getElementById("controlStatus");
+
+    let controlConfig = {
+      enabled: true,
+      confidence_threshold: 0.72,
+      hold_frames: 4,
+      cooldown_sec: 0.9,
+      require_left_lock: false,
+      lock_gesture: "static_open_palm",
+      subscribers: 0
+    };
+    let lastTriggeredText = "等待触发";
+
+    function renderControlStatus() {
+      const sub = controlConfig.subscribers || 0;
+      const stateText = controlConfig.enabled ? `操控端: ${sub}` : `已暂停 (操控端: ${sub})`;
+      controlStatusEl.textContent = `${stateText} | ${lastTriggeredText}`;
+      controlStatusEl.style.color = controlConfig.enabled
+        ? (sub > 0 ? "var(--green)" : "var(--accent)")
+        : "var(--muted)";
+    }
+
+    async function syncControlConfig() {
+      controlConfig.enabled = controlEnabledEl.checked;
+      controlConfig.require_left_lock = requireLeftLockEl.checked;
+      try {
+        const res = await fetch("/api/control/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            enabled: controlConfig.enabled,
+            confidence_threshold: controlConfig.confidence_threshold,
+            hold_frames: controlConfig.hold_frames,
+            cooldown_sec: controlConfig.cooldown_sec,
+            require_left_lock: controlConfig.require_left_lock,
+            lock_gesture: controlConfig.lock_gesture
+          })
+        });
+        if (res.ok) {
+          controlConfig = await res.json();
+          renderControlStatus();
+        }
+      } catch (_) {}
+    }
+
+    controlEnabledEl.onchange = syncControlConfig;
+    requireLeftLockEl.onchange = syncControlConfig;
 
     const VIRTUAL_CAM_RE = /virtual|obs|vcam|wecam|ivcam|manycam|snap|droidcam|iriun|epoccam|youcam|e2esoft|splitcam|camo|nvidia broadcast|xsplit|mmhmm|虚拟|直播|美颜|\bir\b|infrared|depth|hello/i;
     const FALLBACK_HAND_CONNECTIONS = [
@@ -320,8 +447,10 @@
     const procCtx = procCanvas.getContext("2d", { willReadFrequently: false });
 
     const PRESETS = [
-      "static_open_palm", "static_fist", "static_ok_pinch",
-      "dynamic_swipe_right", "dynamic_grab_close", "dynamic_circle_wave"
+      "static_open_palm", "static_fist", "static_ok_pinch", "static_peace",
+      "dynamic_swipe_right", "dynamic_swipe_left", "dynamic_swipe_up", "dynamic_swipe_down",
+      "dynamic_push", "dynamic_pull",
+      "dynamic_grab_close", "dynamic_circle_wave", "static_idle"
     ];
 
     // ===== 手势类别「内部名 → 中文显示名」对照表 =====
@@ -331,12 +460,16 @@
       "static_open_palm":   "张开手掌",
       "static_fist":        "握拳",
       "static_ok_pinch":    "拇指食指捏合",
-      "dynamic_swipe_right":"向右挥",
-      "dynamic_swipe_left": "向左挥",
-      "dynamic_swipe_up":   "向上挥",
-      "dynamic_swipe_down": "向下挥",
+      "static_peace":       "剪刀手",
+      "dynamic_swipe_right":"向右划",
+      "dynamic_swipe_left": "向左划",
+      "dynamic_swipe_up":   "向上划",
+      "dynamic_swipe_down": "向下划",
+      "dynamic_push":       "前推",
+      "dynamic_pull":       "后拉",
       "dynamic_grab_close": "抓握",
       "dynamic_circle_wave":"画圈挥动",
+      "static_idle":        "无动作",
       "fist":    "握拳",
       "palm":    "手掌",
       "like":    "点赞",
@@ -582,6 +715,12 @@
         recordedCounts = data.recorded_counts || {};
         modelMeta.textContent =
           `运行设备: ${zhDevice(data.device)} | 骨架: ${zhSkeleton(data.skeleton_type)} | 窗口: ${data.seq_len} 帧 | 参数量: ${data.params_m}M | 类别数: ${data.labels.length}`;
+        if (data.control) {
+          controlConfig = data.control;
+          controlEnabledEl.checked = Boolean(controlConfig.enabled);
+          requireLeftLockEl.checked = Boolean(controlConfig.require_left_lock);
+          renderControlStatus();
+        }
         renderChips();
       } catch (err) {
         modelMeta.textContent = "后端连接失败，请先双击 start_web.bat 启动服务";
@@ -604,6 +743,8 @@
     function resetAllHandPanels() {
       lastPred = { Left: null, Right: null };
       handMissFrames = { Left: 0, Right: 0 };
+      handTrack = { Left: null, Right: null };
+      handAppearStreak = { Left: 0, Right: 0 };
       resetHandPanel("Left");
       resetHandPanel("Right");
     }
@@ -643,17 +784,32 @@
         if (d.status === "reset") return;
         wsPending = false;
         if (d.error) return;
+        if (typeof d.subscribers === "number") {
+          controlConfig.subscribers = d.subscribers;
+        }
         if (d.results && typeof d.results === "object") {
           for (const [rawSide, res] of Object.entries(d.results)) {
             const side = rawSide === "Left" ? "Left" : "Right";
             lastPred[side] = res;
             renderHandResult(side, res);
+            if (res.triggered_event) {
+              const ev = res.triggered_event;
+              const hName = ev.hand === "Left" ? "左手" : "右手";
+              lastTriggeredText = `⚡ ${hName}·${zhLabel(ev.gesture)} (${Math.round(ev.confidence * 100)}%)`;
+            }
           }
+          renderControlStatus();
           return;
         }
         const side = d.hand === "Left" ? "Left" : "Right";
         lastPred[side] = d;
         renderHandResult(side, d);
+        if (d.triggered_event) {
+          const ev = d.triggered_event;
+          const hName = ev.hand === "Left" ? "左手" : "右手";
+          lastTriggeredText = `⚡ ${hName}·${zhLabel(ev.gesture)} (${Math.round(ev.confidence * 100)}%)`;
+          renderControlStatus();
+        }
       };
       ws.onerror = () => { wsPending = false; };
       ws.onclose = () => { wsPending = false; };
@@ -724,38 +880,239 @@
       }
     }
 
+    // 左右手时空追踪器：入场严检防人脸误检 + 确认后硬锁定防画圈(快/慢)切手
+    let handTrack = { Left: null, Right: null };        // { cx, cy, ts, createdAt, flipVotes }
+    let handAppearStreak = { Left: 0, Right: 0 };       // 新出现手部需连续确认，过滤瞬时人脸误检
+    const TRACK_MAX_AGE_MS = 450;                       // 移出画面超 0.45s 自动释放，方便换另一只手
+    const TRACK_MATCH_DIST = 0.28;                      // 双手同时在画面时的空间匹配半径
+    const SINGLE_HAND_MATCH_DIST = 0.58;                // 仅单手在画面时容忍大跨度挥动
+    const HAND_CONFIRM_FRAMES = 3;                      // 连续 3 帧稳定出现才确认入场
+    const LOCK_SETTLE_MS = 600;                         // 入场前 0.6s 允许纠正初始误判，之后持续在场硬锁定
+    const FLIP_CONFIRM_FRAMES = 4;                      // 入场 0.6s 内的纠错帧数
+
+    function palmCenter(lm) {
+      return {
+        cx: (lm[0].x + lm[9].x) * 0.5,
+        cy: (lm[0].y + lm[9].y) * 0.5
+      };
+    }
+
+    function dist2D(a, b) {
+      return Math.hypot(a.cx - b.cx, a.cy - b.cy);
+    }
+
+    function isPlausibleHand(lm, handedScore, isAlreadyTracked) {
+      // 1. Handedness confidence gate (strict for brand-new hands to block faces; relaxed for tracked hands during rotation)
+      const minScore = isAlreadyTracked ? 0.45 : 0.78;
+      if (handedScore < minScore) return false;
+
+      // 2. Palm scale sanity check (reject tiny noise and oversized face blobs)
+      const palmLen = Math.hypot(lm[9].x - lm[0].x, lm[9].y - lm[0].y);
+      if (palmLen < 0.045 || palmLen > 0.54) return false;
+
+      // 3. Palm width-to-length proportion (strict on entry; relaxed once tracked so side-angle slow circles never drop!)
+      const palmWidth = Math.hypot(lm[17].x - lm[5].x, lm[17].y - lm[5].y);
+      const ratio = palmWidth / palmLen;
+      const minRatio = isAlreadyTracked ? 0.08 : 0.25;
+      if (ratio < minRatio || ratio > 1.35) return false;
+
+      // 4. Overall hand bounding box sanity (reject collapsed or screen-filling false blobs)
+      let minX = 1, maxX = 0, minY = 1, maxY = 0;
+      for (const p of lm) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
+      const bw = maxX - minX;
+      const bh = maxY - minY;
+      if (bw < 0.035 || bh < 0.035 || bw > 0.78 || bh > 0.88) return false;
+      return true;
+    }
+
+    function resolveHandAssignments(candidates, now) {
+      const alive = {
+        Left: handTrack.Left && (now - handTrack.Left.ts) <= TRACK_MAX_AGE_MS ? handTrack.Left : null,
+        Right: handTrack.Right && (now - handTrack.Right.ts) <= TRACK_MAX_AGE_MS ? handTrack.Right : null
+      };
+
+      if (candidates.length === 0) return [];
+
+      if (candidates.length === 1) {
+        const c = candidates[0];
+        const dL = alive.Left ? dist2D(c, alive.Left) : Infinity;
+        const dR = alive.Right ? dist2D(c, alive.Right) : Infinity;
+
+        // If only one track is alive, allow a wide match radius so fast/slow circle waves never drop the lock
+        const onlyOneAlive = Boolean(alive.Left) !== Boolean(alive.Right);
+        const matchRadius = onlyOneAlive ? SINGLE_HAND_MATCH_DIST : TRACK_MATCH_DIST;
+
+        let matchedSide = null;
+        if (dL < matchRadius && dL < dR) matchedSide = "Left";
+        else if (dR < matchRadius && dR <= dL) matchedSide = "Right";
+
+        if (matchedSide) {
+          const prev = alive[matchedSide];
+          const trackAge = now - (prev.createdAt || now);
+          c.createdAt = prev.createdAt || now;
+          if (c.rawSide === matchedSide) {
+            c.side = matchedSide;
+            c.flipVotes = 0;
+          } else if (trackAge <= LOCK_SETTLE_MS && c.score >= 0.88) {
+            // Only allow correcting an initial mislabel within the first 0.6s of entry;
+            // once settled (>0.6s), a continuously visible physical hand can NEVER change Left<->Right!
+            const votes = (prev.flipVotes || 0) + 1;
+            if (votes >= FLIP_CONFIRM_FRAMES) {
+              c.side = c.rawSide;
+              c.flipVotes = 0;
+              c.flippedFrom = matchedSide;
+              c.createdAt = now;
+            } else {
+              c.side = matchedSide;
+              c.flipVotes = votes;
+            }
+          } else {
+            // Hard-locked continuous hand: keep side unconditionally during fast/slow circles & rotations
+            c.side = matchedSide;
+            c.flipVotes = 0;
+          }
+          c.wasTracked = true;
+        } else {
+          c.side = c.rawSide;
+          c.flipVotes = 0;
+          c.createdAt = now;
+          c.wasTracked = false;
+        }
+        return [c];
+      }
+
+      // Two hands detected: never allow both to collapse into the same side
+      const [c0, c1] = candidates;
+      if (alive.Left && alive.Right) {
+        // Assign by minimum total spatial displacement for rock-solid identity continuity
+        const costKeep = dist2D(c0, alive.Left) + dist2D(c1, alive.Right);
+        const costSwap = dist2D(c0, alive.Right) + dist2D(c1, alive.Left);
+        if (costKeep <= costSwap) {
+          c0.side = "Left"; c1.side = "Right";
+        } else {
+          c0.side = "Right"; c1.side = "Left";
+        }
+        c0.wasTracked = true; c1.wasTracked = true;
+        c0.flipVotes = 0; c1.flipVotes = 0;
+        return [c0, c1];
+      }
+
+      if (alive.Left || alive.Right) {
+        const lockedSide = alive.Left ? "Left" : "Right";
+        const otherSide = lockedSide === "Left" ? "Right" : "Left";
+        const ref = alive[lockedSide];
+        const d0 = dist2D(c0, ref);
+        const d1 = dist2D(c1, ref);
+        if (d0 <= d1 && d0 < TRACK_MATCH_DIST) {
+          c0.side = lockedSide; c0.wasTracked = true;
+          c1.side = otherSide; c1.wasTracked = false;
+        } else if (d1 < d0 && d1 < TRACK_MATCH_DIST) {
+          c1.side = lockedSide; c1.wasTracked = true;
+          c0.side = otherSide; c0.wasTracked = false;
+        } else if (c0.rawSide !== c1.rawSide) {
+          c0.side = c0.rawSide; c1.side = c1.rawSide;
+        } else {
+          // Both given same rawSide: keep higher score on rawSide, put the other on opposite side
+          if (c0.score >= c1.score) {
+            c0.side = c0.rawSide; c1.side = c0.rawSide === "Left" ? "Right" : "Left";
+          } else {
+            c1.side = c1.rawSide; c0.side = c1.rawSide === "Left" ? "Right" : "Left";
+          }
+        }
+        c0.flipVotes = 0; c1.flipVotes = 0;
+        return [c0, c1];
+      }
+
+      if (c0.rawSide !== c1.rawSide) {
+        c0.side = c0.rawSide; c1.side = c1.rawSide;
+      } else if (c0.score >= c1.score) {
+        c0.side = c0.rawSide; c1.side = c0.rawSide === "Left" ? "Right" : "Left";
+      } else {
+        c1.side = c1.rawSide; c0.side = c1.rawSide === "Left" ? "Right" : "Left";
+      }
+      c0.wasTracked = false; c1.wasTracked = false;
+      c0.flipVotes = 0; c1.flipVotes = 0;
+      return [c0, c1];
+    }
+
     function resetHand(side) {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ action: "reset", hand: side }));
       }
       lastPred[side] = null;
+      handTrack[side] = null;
+      handAppearStreak[side] = 0;
       resetHandPanel(side);
     }
 
     function onHandResults(results) {
       if (!running) return;
+      const now = performance.now();
       const lms = results.multiHandLandmarks || [];
       const handed = results.multiHandedness || [];
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // 1. Pre-filter candidates (suppress face/background false positives)
+      const candidates = [];
+      for (let i = 0; i < lms.length; i++) {
+        const lm = lms[i];
+        const info = handed[i] || {};
+        const score = typeof info.score === "number" ? info.score : 0.0;
+        let rawSide = info.label === "Left" ? "Left" : "Right";
+        if (swapHandsEl && swapHandsEl.checked) rawSide = rawSide === "Left" ? "Right" : "Left";
+
+        const center = palmCenter(lm);
+        const aliveL = handTrack.Left && (now - handTrack.Left.ts) <= TRACK_MAX_AGE_MS;
+        const aliveR = handTrack.Right && (now - handTrack.Right.ts) <= TRACK_MAX_AGE_MS;
+        const nearRadius = (aliveL !== aliveR && lms.length === 1) ? SINGLE_HAND_MATCH_DIST : TRACK_MATCH_DIST;
+        const nearExisting =
+          (aliveL && dist2D(center, handTrack.Left) < nearRadius) ||
+          (aliveR && dist2D(center, handTrack.Right) < nearRadius);
+
+        if (!isPlausibleHand(lm, score, nearExisting)) {
+          continue;
+        }
+        candidates.push({ lm, rawSide, score, cx: center.cx, cy: center.cy });
+      }
+
+      // 2. Resolve stable Left/Right IDs with spatial continuity & flip hysteresis
+      const assigned = resolveHandAssignments(candidates, now);
 
       const seen = { Left: false, Right: false };
       const handsBatch = {};
       let recordTarget = null;
 
-      for (let i = 0; i < lms.length; i++) {
-        // MediaPipe 的 handedness 按「自拍镜像」约定标注，画面未镜像时会与实际相反，
-        // 所以右侧留了「交换左右」勾选框，勾上即可整体翻转。
-        let side = (handed[i] && handed[i].label) || (i === 0 ? "Right" : "Left");
-        side = side === "Left" ? "Left" : "Right";
-        if (swapHandsEl && swapHandsEl.checked) side = side === "Left" ? "Right" : "Left";
+      for (const item of assigned) {
+        if (item.flippedFrom) {
+          resetHand(item.flippedFrom);
+        }
+        const side = item.side;
+        const prevTrack = handTrack[side];
+        handAppearStreak[side] = item.wasTracked ? HAND_CONFIRM_FRAMES : (handAppearStreak[side] + 1);
+        handTrack[side] = {
+          cx: item.cx,
+          cy: item.cy,
+          ts: now,
+          createdAt: item.createdAt || (prevTrack && prevTrack.createdAt) || now,
+          flipVotes: item.flipVotes || 0
+        };
+
+        // Require HAND_CONFIRM_FRAMES consecutive detections for brand-new hands (kills 1-2 frame face flickers)
+        if (handAppearStreak[side] < HAND_CONFIRM_FRAMES) {
+          continue;
+        }
 
         seen[side] = true;
         handMissFrames[side] = 0;
 
-        const lm = lms[i];
-        drawHandSkeleton(lm, side);
+        drawHandSkeleton(item.lm, side);
 
-        const coords = lm.map(p => [p.x, p.y, p.z]);
+        const coords = item.lm.map(p => [p.x, p.y, p.z]);
         if (!recordTarget) recordTarget = { side, coords };
         handsBatch[side] = coords;
       }
@@ -766,6 +1123,9 @@
       // 某只手离开画面超过 25 帧，清空它自己的滑动窗口，避免再次出现时接上旧数据
       for (const side of ["Left", "Right"]) {
         if (!seen[side]) {
+          if (!assigned.some(a => a.side === side)) {
+            handAppearStreak[side] = 0;
+          }
           handMissFrames[side] += 1;
           if (handMissFrames[side] === 25) resetHand(side);
         }
@@ -1062,22 +1422,114 @@
       }
     };
 
-    btnRecord.onclick = async () => {
+    function inspectRecordedClip(label, frames) {
+      if (!frames || frames.length < 2) return "";
+      const first = frames[0];
+      const last = frames[frames.length - 1];
+      // Mirrored display: screen-right = -(last.x - first.x), screen-down = (last.y - first.y)
+      const screenDx = -(last[0][0] - first[0][0]);
+      const screenDy = last[0][1] - first[0][1];
+      const d2 = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
+      const s0 = d2(first[0], first[9]);
+      const s1 = d2(last[0], last[9]);
+      const ds = (s1 - s0) / Math.max(s0, 0.05);
+
+      const warns = [];
+      if (label === "dynamic_swipe_right" && screenDx < 0.08) warns.push("未检测到明显向右位移");
+      if (label === "dynamic_swipe_left" && screenDx > -0.08) warns.push("未检测到明显向左位移");
+      if (label === "dynamic_swipe_down" && screenDy < 0.08) warns.push("未检测到明显向下位移");
+      if (label === "dynamic_swipe_up" && screenDy > -0.08) warns.push("未检测到明显向上位移");
+      if (label === "dynamic_push" && ds < 0.06) warns.push("手掌未明显靠近放大");
+      if (label === "dynamic_pull" && ds > -0.06) warns.push("手掌未明显远离缩小");
+
+      const dirInfo = `画面位移(${screenDx >= 0 ? "右" : "左"}${Math.abs(screenDx).toFixed(2)}, ${screenDy >= 0 ? "下" : "上"}${Math.abs(screenDy).toFixed(2)})`;
+      return warns.length > 0 ? `${dirInfo} ⚠ ${warns.join("，")}，建议清空当前类别重录` : dirInfo;
+    }
+
+    let isRecordBusy = false;
+
+    function clearRecordVisuals() {
+      videoStage.classList.remove("rec-prep", "rec-live", "rec-done");
+      recHud.classList.remove("show");
+      recBig.className = "rec-big";
+      recPill.classList.remove("show");
+      recBarWrap.classList.remove("show");
+      recBarFill.style.width = "0%";
+    }
+
+    function showRecordHud(bigText, subText, bigClass = "") {
+      recBig.className = "rec-big" + (bigClass ? " " + bigClass : "");
+      // Restart pop animation cleanly on each countdown tick
+      recBig.style.animation = "none";
+      void recBig.offsetWidth;
+      recBig.style.animation = "";
+      recBig.textContent = bigText;
+      recSub.textContent = subText;
+      recHud.classList.add("show");
+    }
+
+    async function startTimedRecord() {
+      if (isRecordBusy || !running) return;
       const raw = labelInput.value.trim();
       if (!raw) { logMsg("请先输入手势名称！"); return; }
       const label = toInternalLabel(raw);
+      isRecordBusy = true;
       btnRecord.disabled = true;
-      recordedFrames = [];
-      recording = true;
-      logMsg(`正在录制 [${raw}]，请保持或做出该手势（1.2 秒）...`);
 
-      setTimeout(async () => {
+      let recTickTimer = null;
+      try {
+        clearRecordVisuals();
+        videoStage.classList.add("rec-prep");
+
+        // 3 -> 2 -> 1 visible countdown overlay right on the camera video (~1.65s)
+        for (const n of ["3", "2", "1"]) {
+          if (!running) return;
+          showRecordHud(n, `准备录制【${raw}】— 请先把手指摆到起始位置`);
+          logMsg(`准备录制 [${raw}]：倒计时 ${n}... 请先将手摆到起始位置`);
+          await sleep(550);
+        }
+        if (!running) return;
+
+        // Switch to live recording visuals: pulsing red border + top-right REC badge + bottom progress bar
+        videoStage.classList.remove("rec-prep");
+        videoStage.classList.add("rec-live");
+        recHud.classList.remove("show");
+        recPill.classList.add("show");
+        recBarWrap.classList.add("show");
+
+        const durationMs = 1200;
+        const recStart = performance.now();
+        recordedFrames = [];
+        recording = true;
+        logMsg(`● 正在录制 [${raw}]（1.2 秒），请一次性做完该动作，不要中途回手！`);
+
+        const updateRecProgress = () => {
+          const elapsed = Math.min(durationMs, performance.now() - recStart);
+          const remain = Math.max(0, (durationMs - elapsed) / 1000);
+          recPillText.textContent = `REC  ${remain.toFixed(1)}s · ${recordedFrames.length} 帧`;
+          recBarFill.style.width = `${(elapsed / durationMs) * 100}%`;
+        };
+        updateRecProgress();
+        recTickTimer = setInterval(updateRecProgress, 50);
+
+        await sleep(durationMs);
         recording = false;
-        btnRecord.disabled = false;
+        if (recTickTimer) { clearInterval(recTickTimer); recTickTimer = null; }
+        recPill.classList.remove("show");
+        recBarWrap.classList.remove("show");
+        videoStage.classList.remove("rec-live");
+
+        if (!running) return;
         if (recordedFrames.length < 6) {
+          videoStage.classList.add("rec-prep");
+          showRecordHud("⚠ 帧数不足", `仅捕获 ${recordedFrames.length} 帧，请确保手在画面中`, "warn");
           logMsg(`录制失败：仅捕获到 ${recordedFrames.length} 帧，请确保手部在画面中。`);
+          await sleep(900);
           return;
         }
+
+        const checkMsg = inspectRecordedClip(label, recordedFrames);
+        const hasWarn = checkMsg.includes("⚠");
         const res = await fetch("/api/samples", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1089,19 +1541,41 @@
         } else {
           recordedCounts = data.recorded_counts;
           renderChips();
-          logMsg(`已保存 [${raw}] 样本第 ${data.count} 条（捕获 ${recordedFrames.length} 帧）。`);
+          logMsg(`已保存 [${raw}] 第 ${data.count} 条（${recordedFrames.length} 帧，${checkMsg}）。`);
+          videoStage.classList.add(hasWarn ? "rec-prep" : "rec-done");
+          showRecordHud(
+            hasWarn ? "⚠ 已保存(注意方向)" : `✓ 已保存 #${data.count}`,
+            `【${raw}】捕获 ${recordedFrames.length} 帧`,
+            hasWarn ? "warn" : "done"
+          );
+          await sleep(850);
         }
-      }, 1200);
-    };
+      } finally {
+        if (recTickTimer) clearInterval(recTickTimer);
+        recording = false;
+        isRecordBusy = false;
+        clearRecordVisuals();
+        btnRecord.disabled = !running;
+      }
+    }
+
+    btnRecord.onclick = startTimedRecord;
+
+    window.addEventListener("keydown", (e) => {
+      if (e.code === "Space" && document.activeElement !== labelInput && running && !isRecordBusy) {
+        e.preventDefault();
+        startTimedRecord();
+      }
+    });
 
     btnTrain.onclick = async () => {
       btnTrain.disabled = true;
-      logMsg("正在使用真实录制样本训练手势模型（含数据增强）...");
+      logMsg("正在使用真实录制样本训练手势模型（含速度特征与类别均衡增强）...");
       try {
         const res = await fetch("/api/train", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ epochs: 18 })
+          body: JSON.stringify({ epochs: 22 })
         });
         const data = await res.json();
         if (!res.ok) {
@@ -1114,6 +1588,17 @@
       } finally {
         btnTrain.disabled = false;
       }
+    };
+
+    btnClearOne.onclick = async () => {
+      const raw = labelInput.value.trim();
+      if (!raw) { logMsg("请先选择或输入要清空的手势类别。"); return; }
+      const label = toInternalLabel(raw);
+      const res = await fetch(`/api/samples/${encodeURIComponent(label)}`, { method: "DELETE" });
+      const data = await res.json();
+      recordedCounts = data.recorded_counts || {};
+      renderChips();
+      logMsg(`已清空 [${raw}] 的录制样本，可直接重新录制。`);
     };
 
     btnClear.onclick = async () => {

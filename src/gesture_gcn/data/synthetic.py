@@ -153,6 +153,7 @@ def build_synthetic_dataloaders(
         spec=spec,
         use_bone_fusion=cfg.use_bone_fusion,
         scale_floor=cfg.norm_scale_floor,
+        use_velocity=cfg.use_velocity,
     )
     val_per_cls = max(1, int(round(cfg.num_samples_per_class * cfg.val_ratio)))
     train_per_cls = max(1, cfg.num_samples_per_class - val_per_cls)

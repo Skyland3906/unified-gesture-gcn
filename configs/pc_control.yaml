@@ -1,0 +1,58 @@
+# Decoupled Cross-Platform (Windows / macOS) PC Controller Configuration
+# Connects to the recognition service via WebSocket API (/ws/events).
+# Edit mappings freely without touching any gesture recognition / PyTorch code.
+
+ws_url: "ws://127.0.0.1:8000/ws/events"
+dry_run: false
+
+# Zoom implementation:
+#   Windows: "ctrl_wheel" (Ctrl + Mouse Wheel) | "ctrl_plus_minus" (Ctrl + '+' / '-')
+#   macOS:   automatically uses Cmd + '+' / Cmd + '-' (works across Chrome, Safari, Preview, PPT, Keynote)
+zoom_method: "ctrl_wheel"
+zoom_steps: 2
+
+# Gesture -> Action mapping
+# hand: "Any" | "Right" | "Left"
+# Supported built-in actions:
+#   ppt_next, ppt_prev, ppt_next_arrow, ppt_prev_arrow,
+#   ppt_start (Win: F5 / Mac: Cmd+Shift+Return),
+#   ppt_current (Win: Shift+F5 / Mac: Cmd+Return),
+#   ppt_stop (Esc), ppt_toggle_show,
+#   zoom_in, zoom_out, zoom_reset (Win: Ctrl+0 / Mac: Cmd+0),
+#   media_play_pause, volume_up, volume_down, volume_mute,
+#   key, hotkey (e.g. Keynote play on macOS: action: "hotkey", keys: ["cmd", "alt", "p"])
+mappings:
+  dynamic_swipe_down:
+    hand: "Any"
+    action: "ppt_next"
+    description: "向下划 -> PPT 下一页 (PageDown)"
+
+  dynamic_swipe_up:
+    hand: "Any"
+    action: "ppt_prev"
+    description: "向上划 -> PPT 上一页 (PageUp)"
+
+  dynamic_swipe_right:
+    hand: "Any"
+    action: "ppt_next_arrow"
+    description: "向右划 -> PPT 下一页 (Right)"
+
+  dynamic_swipe_left:
+    hand: "Any"
+    action: "ppt_prev_arrow"
+    description: "向左划 -> PPT 上一页 (Left)"
+
+  dynamic_push:
+    hand: "Any"
+    action: "zoom_in"
+    description: "前推 -> 放大"
+
+  dynamic_pull:
+    hand: "Any"
+    action: "zoom_out"
+    description: "后拉 -> 缩小"
+
+  static_peace:
+    hand: "Any"
+    action: "ppt_toggle_show"
+    description: "剪刀手 -> 开始/退出 PPT 放映 (Shift+F5 / Esc)"

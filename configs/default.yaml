@@ -1,12 +1,13 @@
 # Unified Static + Dynamic Hand Gesture Recognition (Plan A)
 experiment_name: "unified_gesture_demo"
 seed: 42
-device: "auto" # "auto" | "cpu" | "cuda"
+device: "auto" # "auto" | "cpu" | "cuda" | "mps"
 
 data:
   skeleton_type: "mediapipe_21" # "mediapipe_21" | "shrec_22"
   seq_len: 32
   use_bone_fusion: true
+  use_velocity: true
   norm_scale_floor: 0.05
   num_samples_per_class: 32
   val_ratio: 0.25
