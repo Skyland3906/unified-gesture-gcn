@@ -9,7 +9,7 @@
 本项目（`gesture-gcn`）是一个面向 **静态 + 动态统一骨架手势识别** 的轻量级 PyTorch 框架（~0.6M 参数），包含三大解耦模块：
 
 1. **核心模型与训练引擎**（`src/gesture_gcn/`）：融合 DA-GCN（ARU/DRU/CTF）、DSTSA-GCN（分组静态拓扑 + MS-TCN）与 DRE（动态范围嵌入）及 Joint+Bone+Velocity 特征预处理。
-2. **实时摄像头 Web Studio**（`scripts/run_web.py` + `src/gesture_gcn/web/`）：FastAPI + WebSocket 后端，前端通过浏览器原生摄像头 + 本地化 MediaPipe Hands JS 提取 21 点 3D 手部骨架，支持双手实时推理、在线录制自定义手势并一键微调热更新模型，以及运动学先验与回手抑制。
+2. **实时摄像头 Web Studio**（`scripts/run_web.py` + `src/gesture_gcn/web/`）：FastAPI + WebSocket 后端，前端通过浏览器原生摄像头 + 本地化新版 `@mediapipe/tasks-vision` `HandLandmarker`（GPU 加速，自动回退旧版 `@mediapipe/hands`）与暗部自适应提亮增强提取 21 点 3D 手部骨架，支持双手实时推理、在线录制自定义手势并一键微调热更新模型，以及运动学先验与回手抑制。
 3. **跨平台手势控电脑客户端**（`scripts/pc_controller.py` + `configs/pc_control.yaml`）：零 PyTorch 依赖，订阅 `ws://127.0.0.1:8000/ws/events` 事件流，原生调用操作系统输入接口控制 PPT / Keynote 翻页、缩放、放映开关与系统音量：
    - **Windows**：原生 Win32 `user32.SendInput`
    - **macOS**：原生 CoreGraphics `CGEventPost`（`ApplicationServices.framework`，兼容 Intel & Apple Silicon ARM64）+ `osascript`
@@ -104,8 +104,11 @@ docker run -p 7860:7860 unified-gesture-gcn
 
 3. **验证本地 MediaPipe 资源就位**：
    确认以下文件存在：
-   - `src/gesture_gcn/web/static/mediapipe/hands/hands.js`
-   - `src/gesture_gcn/web/static/mediapipe/hands/hand_landmark_lite.tflite`
+   - `src/gesture_gcn/web/static/mediapipe/tasks/vision_bundle.mjs`
+   - `src/gesture_gcn/web/static/mediapipe/tasks/wasm/vision_wasm_internal.wasm`
+   - `src/gesture_gcn/web/static/mediapipe/tasks/hand_landmarker.task`
+   - `src/gesture_gcn/web/static/mediapipe/hands/hands.js`（旧版回退）
+   - `src/gesture_gcn/web/static/mediapipe/hands/hand_landmark_lite.tflite`（旧版回退）
 
 4. **验证 Web 服务健康接口**：
    启动服务后请求 `GET http://127.0.0.1:8000/api/status`：
@@ -176,3 +179,14 @@ docker run -p 7860:7860 unified-gesture-gcn
    - 模型非常轻量，若在特定 PyTorch 版本下希望切换回纯 CPU，只需将 `configs/default.yaml` 中的 `device: "auto"` 改为 `device: "cpu"` 即可。
 6. **在 Windows 编辑 `.sh` 脚本后传到 Mac 报 `\r: command not found`**
    - 确保 `start_web.sh` 与 `start_pc_controller.sh` 使用 Unix `LF` 换行符（仓库中已保持 `LF`）。
+
+---
+
+## 8. 开发协作与 Git 提交规范
+
+- **每次完成功能改动或 Bug 修复并验收通过后，必须使用中文编写清晰的 `git commit` 提交信息并提交到本地仓库**（不要把未验收或调试临时文件混入提交）。
+- 推荐提交格式：`<类型>: <中文改动核心说明>`，例如：
+  - `feat: 升级 HandLandmarker 并增加暗部自适应提亮增强`
+  - `fix: 修复单手画圈时左右手身份跳变问题`
+  - `perf: 合并双手 Batch=2 推理并启用 TorchScript 加速`
+- 如改动涉及多个文件或关键参数调整，建议在 commit 正文中补充要点列表，方便后续回溯；仅在用户明确要求时再执行 `git push`。

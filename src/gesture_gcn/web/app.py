@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import mimetypes
 import threading
 from pathlib import Path
 from typing import Any
+
+# Ensure ES module (.mjs) and WebAssembly (.wasm) serve with proper MIME types on all platforms
+mimetypes.add_type("application/javascript", ".mjs")
+mimetypes.add_type("application/wasm", ".wasm")
 
 import torch
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect

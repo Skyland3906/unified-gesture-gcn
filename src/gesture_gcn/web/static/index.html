@@ -227,10 +227,13 @@
     <div class="card">
       <div class="options-bar">
         <label>
-          <input type="checkbox" id="swapHands" checked /> 交换左右（画面上左右标反了就切一下）
+          <input type="checkbox" id="swapHands" checked /> 交换左右（标反了切一下）
         </label>
         <label>
-          <input type="checkbox" id="hqMode" /> 高精度（远距离更稳，略慢）
+          <input type="checkbox" id="hqMode" /> 高精度（远距离更稳）
+        </label>
+        <label>
+          <input type="checkbox" id="autoEnhance" checked /> 暗光提亮增强
         </label>
       </div>
 
@@ -338,6 +341,7 @@
     };
     const swapHandsEl = document.getElementById("swapHands");
     const hqModeEl = document.getElementById("hqMode");
+    const autoEnhanceEl = document.getElementById("autoEnhance");
     // MediaPipe 的 handedness 是按「前置自拍镜像」约定给出的，而这里喂进去的是摄像头原始帧，
     // 所以默认勾上交换；勾选结果记忆到本地，下次打开不用再调。
     try {
@@ -345,6 +349,8 @@
       if (savedSwap !== null) swapHandsEl.checked = savedSwap === "1";
       const savedHq = localStorage.getItem("hqMode");
       if (savedHq !== null) hqModeEl.checked = savedHq === "1";
+      const savedEnh = localStorage.getItem("autoEnhance");
+      if (savedEnh !== null) autoEnhanceEl.checked = savedEnh === "1";
     } catch (_) {}
     swapHandsEl.onchange = () => {
       try { localStorage.setItem("swapHands", swapHandsEl.checked ? "1" : "0"); } catch (_) {}
@@ -357,10 +363,26 @@
       try { localStorage.setItem("hqMode", hqModeEl.checked ? "1" : "0"); } catch (_) {}
       applyHandOptions();
     };
+    autoEnhanceEl.onchange = () => {
+      try { localStorage.setItem("autoEnhance", autoEnhanceEl.checked ? "1" : "0"); } catch (_) {}
+    };
 
     function applyHandOptions() {
-      if (!hands) return;
       const hq = hqModeEl.checked;
+      if (handLandmarker) {
+        try {
+          handLandmarker.setOptions({
+            numHands: 2,
+            minHandDetectionConfidence: hq ? 0.72 : 0.66,
+            minHandPresenceConfidence: hq ? 0.68 : 0.62,
+            minTrackingConfidence: hq ? 0.65 : 0.58
+          });
+        } catch (err) {
+          console.warn("HandLandmarker.setOptions warning:", err);
+        }
+        return;
+      }
+      if (!hands) return;
       hands.setOptions({
         maxNumHands: 2,                                  // 双手：同时追踪左右两只手
         modelComplexity: hq ? 1 : 0,                     // 1 更准（远距/小目标），0 更快
@@ -445,6 +467,58 @@
 
     const procCanvas = document.createElement("canvas");
     const procCtx = procCanvas.getContext("2d", { willReadFrequently: false });
+    // Tiny 32x24 luminance meter canvas for zero-lag adaptive dark/backlight enhancement
+    const meterCanvas = document.createElement("canvas");
+    meterCanvas.width = 32;
+    meterCanvas.height = 24;
+    const meterCtx = meterCanvas.getContext("2d", { willReadFrequently: true });
+    let enhanceFrameCounter = 0;
+    let smoothBrightness = 1.0;
+    let smoothContrast = 1.0;
+
+    function updateAdaptiveLighting() {
+      if (!autoEnhanceEl || !autoEnhanceEl.checked) {
+        smoothBrightness = 1.0;
+        smoothContrast = 1.0;
+        return;
+      }
+      enhanceFrameCounter = (enhanceFrameCounter + 1) % 6;
+      if (enhanceFrameCounter !== 1) return;
+      try {
+        meterCtx.drawImage(video, 0, 0, 32, 24);
+        const data = meterCtx.getImageData(0, 0, 32, 24).data;
+        let roiSum = 0, roiCnt = 0;
+        let borderSum = 0, borderCnt = 0;
+        for (let y = 0; y < 24; y++) {
+          for (let x = 0; x < 32; x++) {
+            const idx = (y * 32 + x) * 4;
+            const luma = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+            // Focus on center-lower hand region (x: 4..27, y: 6..23) to detect backlit dark hands
+            if (x >= 4 && x <= 27 && y >= 6) {
+              roiSum += luma;
+              roiCnt += 1;
+            } else {
+              borderSum += luma;
+              borderCnt += 1;
+            }
+          }
+        }
+        const handLuma = roiSum / Math.max(roiCnt, 1);
+        const borderLuma = borderSum / Math.max(borderCnt, 1);
+        const isBacklit = (borderLuma - handLuma) > 30;
+        const targetLuma = isBacklit ? 132 : 118;
+
+        let targetB = 1.0;
+        let targetC = 1.0;
+        if (handLuma < targetLuma) {
+          const deficit = targetLuma - handLuma;
+          targetB = Math.min(1.78, 1.0 + deficit / 105);
+          targetC = Math.min(1.30, 1.0 + deficit / 240);
+        }
+        smoothBrightness = 0.35 * targetB + 0.65 * smoothBrightness;
+        smoothContrast = 0.35 * targetC + 0.65 * smoothContrast;
+      } catch (_) {}
+    }
 
     const PRESETS = [
       "static_open_palm", "static_fist", "static_ok_pinch", "static_peace",
@@ -518,7 +592,10 @@
     let isProcessing = false;
     let loopTimer = null;
     let activeSessionId = 0;
-    let hands = null;
+    let handLandmarker = null;          // 新版 @mediapipe/tasks-vision HandLandmarker (优先)
+    let trackerEngineName = "";
+    let lastVideoTs = 0;
+    let hands = null;                   // 旧版 @mediapipe/hands (自动回退)
     let handsReady = false;
     let recording = false;
     let recordedFrames = [];
@@ -1150,14 +1227,66 @@
     }
 
     async function ensureHandsReady() {
+      if (handLandmarker || (hands && handsReady)) return;
+
+      // 优先加载新版 @mediapipe/tasks-vision HandLandmarker（GPU 加速，手背/遮挡精度更高）
+      try {
+        const visionMod = await withTimeout(
+          import("/static/mediapipe/tasks/vision_bundle.mjs"),
+          10000,
+          "新版 HandLandmarker 脚本加载超时"
+        );
+        const { FilesetResolver, HandLandmarker } = visionMod;
+        const vision = await withTimeout(
+          FilesetResolver.forVisionTasks("/static/mediapipe/tasks/wasm"),
+          15000,
+          "新版 HandLandmarker WASM 初始化超时"
+        );
+        const hq = hqModeEl && hqModeEl.checked;
+        const makeOpts = (delegate) => ({
+          baseOptions: {
+            modelAssetPath: "/static/mediapipe/tasks/hand_landmarker.task",
+            delegate
+          },
+          runningMode: "VIDEO",
+          numHands: 2,
+          minHandDetectionConfidence: hq ? 0.72 : 0.66,
+          minHandPresenceConfidence: hq ? 0.68 : 0.62,
+          minTrackingConfidence: hq ? 0.65 : 0.58
+        });
+
+        try {
+          handLandmarker = await withTimeout(
+            HandLandmarker.createFromOptions(vision, makeOpts("GPU")),
+            20000,
+            "HandLandmarker GPU 初始化超时"
+          );
+          trackerEngineName = "新版 HandLandmarker (GPU)";
+        } catch (gpuErr) {
+          console.warn("HandLandmarker GPU delegate unavailable, falling back to CPU:", gpuErr);
+          handLandmarker = await withTimeout(
+            HandLandmarker.createFromOptions(vision, makeOpts("CPU")),
+            20000,
+            "HandLandmarker CPU 初始化超时"
+          );
+          trackerEngineName = "新版 HandLandmarker (CPU)";
+        }
+        handsReady = true;
+        return;
+      } catch (tasksErr) {
+        console.warn("Modern HandLandmarker unavailable, falling back to legacy @mediapipe/hands:", tasksErr);
+        handLandmarker = null;
+      }
+
+      // 自动回退到旧版 @mediapipe/hands
       if (typeof Hands === "undefined") {
-        throw new Error("本地手部追踪脚本未能加载（请刷新页面或检查 static/mediapipe/hands/hands.js）");
+        throw new Error("本地手部追踪脚本未能加载（请先运行 python scripts/download_assets.py）");
       }
       if (!hands) {
         hands = new Hands({
           locateFile: (file) => `/static/mediapipe/hands/${file}`
         });
-        applyHandOptions();      // 双手 + 高精度档（右侧面板可一键切回轻量）
+        applyHandOptions();
         hands.onResults(onHandResults);
       }
       if (!handsReady && typeof hands.initialize === "function") {
@@ -1166,6 +1295,7 @@
           20000,
           "本地手部追踪模型初始化超时"
         );
+        trackerEngineName = "旧版 MediaPipe Hands";
         handsReady = true;
       }
     }
@@ -1178,7 +1308,7 @@
 
     async function loopFrame(sessionId) {
       if (!running || sessionId !== activeSessionId) return;
-      if (switchingCamera || isProcessing || !hands || video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0 || video.paused || video.ended) {
+      if (switchingCamera || isProcessing || (!handLandmarker && !hands) || video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0 || video.paused || video.ended) {
         scheduleNextFrame(sessionId, 80);
         return;
       }
@@ -1196,16 +1326,42 @@
         procCanvas.width = pw;
         procCanvas.height = ph;
       }
+
+      // Adaptive dark/backlight enhancement on offscreen processing canvas only
+      updateAdaptiveLighting();
+      if (autoEnhanceEl && autoEnhanceEl.checked && (smoothBrightness > 1.03 || smoothContrast > 1.02)) {
+        procCtx.filter = `brightness(${smoothBrightness.toFixed(2)}) contrast(${smoothContrast.toFixed(2)})`;
+      } else {
+        procCtx.filter = "none";
+      }
       procCtx.drawImage(video, 0, 0, pw, ph);
+      procCtx.filter = "none";
 
       const t0 = performance.now();
       isProcessing = true;
       try {
-        await withTimeout(
-          hands.send({ image: procCanvas }),
-          8000,
-          "手部追踪处理超时"
-        );
+        if (handLandmarker) {
+          const ts = Math.max(lastVideoTs + 1, Math.round(performance.now()));
+          lastVideoTs = ts;
+          const res = handLandmarker.detectForVideo(procCanvas, ts);
+          const rawHanded = res.handednesses || res.handedness || [];
+          onHandResults({
+            multiHandLandmarks: res.landmarks || [],
+            multiHandedness: rawHanded.map(h => {
+              const top = Array.isArray(h) ? (h[0] || {}) : (h || {});
+              return {
+                label: top.categoryName || top.displayName || top.label || "Right",
+                score: typeof top.score === "number" ? top.score : 0.0
+              };
+            })
+          });
+        } else {
+          await withTimeout(
+            hands.send({ image: procCanvas }),
+            8000,
+            "手部追踪处理超时"
+          );
+        }
         consecutiveErrors = 0;
       } catch (err) {
         consecutiveErrors += 1;
@@ -1401,8 +1557,9 @@
         const activeName = stream.getVideoTracks()[0]?.label || "默认摄像头";
         const camCount = cameraSelect.options.length;
         const skipNote = openResult.skipped.length > 0 ? `（已自动跳过不可用设备）` : "";
+        const engineNote = trackerEngineName ? ` | 引擎: ${trackerEngineName}` : "";
         camStatus.textContent = "已启动，等待手部进入画面";
-        logMsg(`已启用 [${activeName}]${skipNote}，正在实时识别（共检测到 ${camCount} 个摄像头，可在下拉框随时切换）...`);
+        logMsg(`已启用 [${activeName}]${skipNote}${engineNote}，正在实时识别（共检测到 ${camCount} 个摄像头）...`);
         scheduleNextFrame(sessionId, FAST_YIELD_MS);
       } catch (err) {
         if (sessionId !== activeSessionId) return;
