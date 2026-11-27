@@ -149,7 +149,7 @@ docker run -p 7860:7860 unified-gesture-gcn
 | `src/gesture_gcn/inference/recognizer.py` | 模型推理、TorchScript 加速、自适应 EMA 与运动学先验/回手抑制 |
 | `src/gesture_gcn/inference/events.py` | 预设手势词表、连续帧防抖、冷却、反向冷却、左手安全锁与事件广播器 |
 
-> **运行时生成目录（已写入 `.gitignore`，不要提交到 Git）**：`checkpoints/`、`data/`、`src/gesture_gcn/web/static/mediapipe/`、`.venv/`。
+> **默认预训练权重**：`checkpoints/unified_gesture_gcn.pt` 已纳入仓库以便跨平台开箱即用；其余临时文件与个人录制数据（`data/`、`src/gesture_gcn/web/static/mediapipe/`、`.venv/`）已写入 `.gitignore`，不要提交到 Git。
 
 ### 6.2 HTTP / WebSocket API
 

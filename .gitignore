@@ -14,8 +14,9 @@ build/
 *.zip
 *.tar.gz
 
-# Runtime artifacts, checkpoints & user-recorded datasets (root-level only)
-/checkpoints/
+# Runtime artifacts & user-recorded datasets (keep default pretrained checkpoint tracked)
+/checkpoints/*
+!/checkpoints/unified_gesture_gcn.pt
 /data/
 
 # Downloaded MediaPipe static assets (fetched via scripts/download_assets.py)
