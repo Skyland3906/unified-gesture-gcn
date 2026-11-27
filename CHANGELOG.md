@@ -8,7 +8,10 @@
 
 ## 2026-11-27
 
-### 2026-11-27 18:43 | `docs`: 新增项目功能更新日志并在 AGENT.md 中补充日志维护规范
+### 2026-11-27 18:54 | `chore`: 更新 12 类真实手势预训练权重 checkpoints/unified_gesture_gcn.pt
+- 更新默认模型权重 [checkpoints/unified_gesture_gcn.pt](checkpoints/unified_gesture_gcn.pt)（约 1.2 MB，9 通道 Joint+Bone+Velocity、32 帧窗口），包含在 macOS 环境下新训练的 12 类完整静态+动态手势（`static_open_palm`、`static_fist`、`static_ok_pinch`、`static_peace`、`dynamic_swipe_left/right/up/down`、`dynamic_push`、`dynamic_pull`、`dynamic_grab_close`、`dynamic_circle_wave`）。
+
+### 2026-11-27 18:43 | `docs`: 新增项目功能更新日志并在 AGENT.md 中补充日志维护规范 (`6bcf443`)
 - 新增根目录 [CHANGELOG.md](CHANGELOG.md)，完整回溯并记录项目自首个版本以来的全部功能演进与修复历史。
 - 更新 [AGENT.md](AGENT.md) 第 6.1 节与第 8 节，明确要求每次 `git commit` 以及上传（`git push`）到 GitHub 时，必须同步将改动时间与具体内容写入 `CHANGELOG.md` 并一并提交。
 
