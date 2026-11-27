@@ -8,6 +8,9 @@
 
 ## 2026-11-27
 
+### 2026-11-27 20:13 | `docs`: 在 README 顶部新增显眼的更新日志跳转按钮与提示入口
+- 在 [README.md](README.md) 顶部标题下方新增醒目的 `CHANGELOG.md` 徽章按钮与 GitHub `[!TIP]` 高亮跳转入口，并在目录结构中补充 `CHANGELOG.md` 说明。
+
 ### 2026-11-27 20:11 | `feat`: 默认启用相对形状分支并更新 12 类真实手势预训练权重
 - 将 [configs/default.yaml](configs/default.yaml) 中的 `use_shape_branch` 调整为默认 `true`（保留 `ModelConfig` 默认回退 `false` 以确保历史旧权重向后兼容），同步更新 [tests/test_inference_and_web.py](tests/test_inference_and_web.py) 对应默认状态断言。
 - 基于 12 类真实录制手势样本启用 `RelativeShapeBranch` 重新训练（22 轮，训练集准确率 `100.00%`，参数量 `0.332M`）并更新默认权重 [checkpoints/unified_gesture_gcn.pt](checkpoints/unified_gesture_gcn.pt)（约 `1.34 MB`），启动 Web Studio 后默认即开启「启用相对形状分支检测」。

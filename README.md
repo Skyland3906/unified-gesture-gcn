@@ -1,5 +1,10 @@
 # Unified Static & Dynamic Hand Gesture GCN (Plan A)
 
+[![查看项目更新日志](https://img.shields.io/badge/%E6%9F%A5%E7%9C%8B%E9%A1%B9%E7%9B%AE%E6%9B%B4%E6%96%B0%E6%97%A5%E5%BF%97-CHANGELOG.md-0ea5e9?style=for-the-badge&logo=readthedocs&logoColor=white)](CHANGELOG.md)
+
+> [!TIP]
+> **想快速了解最新功能与迭代历史？** 👉 **[点击这里查看完整更新日志（CHANGELOG.md）](CHANGELOG.md)**
+
 面向**静态 + 动态统一骨架手势识别**的轻量级 PyTorch 工程框架与实时摄像头 Web Studio，融合三篇前沿论文的核心设计：
 
 1. **DA-GCN (2025)**：4 层轻量骨干 + **ARU（注意力拓扑）** + **DRU（差分拓扑）** + 通道/时间双流融合（CTF）。
@@ -12,6 +17,7 @@
 
 ```text
 ├── .github/workflows/ci.yml          # GitHub Actions 自动化测试
+├── CHANGELOG.md                      # 项目功能更新日志（按时间倒序记录每次迭代）
 ├── Dockerfile                        # 一键云端部署（兼容 Hugging Face Spaces / Render）
 ├── configs/default.yaml              # 声明式实验配置（支持一键消融实验）
 ├── pyproject.toml                    # 现代 Python 依赖与 pytest/ruff 配置
