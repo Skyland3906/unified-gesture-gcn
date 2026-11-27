@@ -8,6 +8,10 @@
 
 ## 2026-11-27
 
+### 2026-11-27 20:11 | `feat`: 默认启用相对形状分支并更新 12 类真实手势预训练权重
+- 将 [configs/default.yaml](configs/default.yaml) 中的 `use_shape_branch` 调整为默认 `true`（保留 `ModelConfig` 默认回退 `false` 以确保历史旧权重向后兼容），同步更新 [tests/test_inference_and_web.py](tests/test_inference_and_web.py) 对应默认状态断言。
+- 基于 12 类真实录制手势样本启用 `RelativeShapeBranch` 重新训练（22 轮，训练集准确率 `100.00%`，参数量 `0.332M`）并更新默认权重 [checkpoints/unified_gesture_gcn.pt](checkpoints/unified_gesture_gcn.pt)（约 `1.34 MB`），启动 Web Studio 后默认即开启「启用相对形状分支检测」。
+
 ### 2026-11-27 20:01 | `feat`: 新增手势区域相对形状分支、网页端开关与实时训练可视进度条
 - 新增 [src/gesture_gcn/models/shape.py](src/gesture_gcn/models/shape.py) 实现 `RelativeShapeBranch`：基于窗口归一化骨架提取 4 通道局部 `8×8` 高斯软光栅网格（手部轮廓占据、指尖轮廓、扫掠轨迹密度、带时间先后的 MHI 运动历史网格）与 21 维相对几何描述子（兼顾轴对齐宽高比/有向位移与旋转不变 2D PCA 细长度、刚性掌骨尺度归一化指尖展开度与分散度、环形空心度及有向绕转角），通过样本自适应残差门控融合进 `UnifiedGestureGCN`，完整支持 TorchScript 动态 Batch 编译与旧权重向后兼容。
 - 在 [src/gesture_gcn/config.py](src/gesture_gcn/config.py) 与 [configs/default.yaml](configs/default.yaml) 中新增 `use_shape_branch`（默认 `false`）和 `shape_grid_size` 配置开关，并在 [src/gesture_gcn/models/network.py](src/gesture_gcn/models/network.py) 接入分支装配。

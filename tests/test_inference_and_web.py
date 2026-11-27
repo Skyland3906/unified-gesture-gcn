@@ -54,7 +54,7 @@ def test_web_app_status_and_websocket(tmp_path: Path) -> None:
     body = res.json()
     assert body["num_joints"] == 21
     assert len(body["labels"]) == 6
-    assert body["use_shape_branch"] is False
+    assert body["use_shape_branch"] is True
 
     # Frontend handedness alignment: HandLandmarker outputs anatomical Left/Right on unmirrored frames,
     # so swapHands must default to unchecked and legacy @mediapipe/hands fallback must normalize labels.
