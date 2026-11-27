@@ -28,6 +28,11 @@ HAND_LANDMARKER_MODEL_URLS: tuple[str, ...] = (
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task",
 )
 
+FACE_DETECTOR_MODEL_URLS: tuple[str, ...] = (
+    "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+    "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite",
+)
+
 
 def _fetch_bytes(urls: tuple[str, ...], desc: str, timeout: int = 90) -> bytes:
     last_err: Exception | None = None
@@ -102,6 +107,14 @@ def download_mediapipe_tasks_vision(target_dir: Path) -> None:
         print(f"Saved hand_landmarker.task ({len(model_bytes) / 1e6:.2f} MB) to {target_dir}")
     else:
         print(f"hand_landmarker.task already present in {target_dir}")
+
+    face_model_path = target_dir / "blaze_face_short_range.tflite"
+    if not face_model_path.exists():
+        face_bytes = _fetch_bytes(FACE_DETECTOR_MODEL_URLS, "blaze_face_short_range.tflite face guard model", timeout=90)
+        face_model_path.write_bytes(face_bytes)
+        print(f"Saved blaze_face_short_range.tflite ({len(face_bytes) / 1e3:.1f} KB) to {target_dir}")
+    else:
+        print(f"blaze_face_short_range.tflite already present in {target_dir}")
 
 
 def main() -> None:

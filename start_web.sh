@@ -42,9 +42,9 @@ else
   exit 1
 fi
 
-# 首次运行如缺少本地 MediaPipe Hands 静态资源，自动下载
-if [ ! -f "src/gesture_gcn/web/static/mediapipe/hands/hands.js" ]; then
-  echo "[0/2] 未检测到本地 MediaPipe Hands 资源，正在自动下载..."
+# 首次运行如缺少本地 MediaPipe 手部/防人脸误检静态资源，自动下载
+if [ ! -f "src/gesture_gcn/web/static/mediapipe/hands/hands.js" ] || [ ! -f "src/gesture_gcn/web/static/mediapipe/tasks/blaze_face_short_range.tflite" ]; then
+  echo "[0/2] 检测到本地 MediaPipe 静态资源不完整，正在自动补全下载..."
   "${PYTHON_BIN}" scripts/download_assets.py
 fi
 

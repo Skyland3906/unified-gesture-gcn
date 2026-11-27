@@ -107,6 +107,7 @@ docker run -p 7860:7860 unified-gesture-gcn
    - `src/gesture_gcn/web/static/mediapipe/tasks/vision_bundle.mjs`
    - `src/gesture_gcn/web/static/mediapipe/tasks/wasm/vision_wasm_internal.wasm`
    - `src/gesture_gcn/web/static/mediapipe/tasks/hand_landmarker.task`
+   - `src/gesture_gcn/web/static/mediapipe/tasks/blaze_face_short_range.tflite`（防人脸误检）
    - `src/gesture_gcn/web/static/mediapipe/hands/hands.js`（旧版回退）
    - `src/gesture_gcn/web/static/mediapipe/hands/hand_landmark_lite.tflite`（旧版回退）
 

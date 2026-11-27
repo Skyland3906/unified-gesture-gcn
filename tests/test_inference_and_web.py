@@ -63,6 +63,8 @@ def test_web_app_status_and_websocket(tmp_path: Path) -> None:
     assert '<input type="checkbox" id="swapHands" />' in html
     assert 'id="swapHands" checked' not in html
     assert 'label: h && h.label === "Left" ? "Right" : "Left"' in html
+    assert '<input type="checkbox" id="antiFace" checked />' in html
+    assert "blaze_face_short_range.tflite" in html
 
     with client.websocket_connect("/ws/predict") as ws:
         frame = [[0.5, 0.5, 0.0] for _ in range(21)]

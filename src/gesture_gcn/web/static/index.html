@@ -235,6 +235,9 @@
         <label>
           <input type="checkbox" id="autoEnhance" checked /> 暗光提亮增强
         </label>
+        <label>
+          <input type="checkbox" id="antiFace" checked /> 防人脸误检
+        </label>
       </div>
 
       <div class="hands-grid">
@@ -342,6 +345,7 @@
     const swapHandsEl = document.getElementById("swapHands");
     const hqModeEl = document.getElementById("hqMode");
     const autoEnhanceEl = document.getElementById("autoEnhance");
+    const antiFaceEl = document.getElementById("antiFace");
     // 新版 @mediapipe/tasks-vision HandLandmarker 在原始未镜像帧上直接输出真实解剖学左右手（0=Right, 1=Left），
     // 旧版 @mediapipe/hands 已在回退回调中做过统一翻转，因此两者均默认无需交换（仅硬件自带镜像的特殊摄像头才需勾选）。
     // 使用新键 swapHandsV2 迁移旧版缓存，避免旧版默认 swapHands="1" 残留导致左右依然颠倒。
@@ -353,6 +357,8 @@
       if (savedHq !== null) hqModeEl.checked = savedHq === "1";
       const savedEnh = localStorage.getItem("autoEnhance");
       if (savedEnh !== null) autoEnhanceEl.checked = savedEnh === "1";
+      const savedAntiFace = localStorage.getItem("antiFace");
+      if (savedAntiFace !== null) antiFaceEl.checked = savedAntiFace === "1";
     } catch (_) {}
     swapHandsEl.onchange = () => {
       try { localStorage.setItem("swapHandsV2", swapHandsEl.checked ? "1" : "0"); } catch (_) {}
@@ -368,6 +374,10 @@
     autoEnhanceEl.onchange = () => {
       try { localStorage.setItem("autoEnhance", autoEnhanceEl.checked ? "1" : "0"); } catch (_) {}
     };
+    antiFaceEl.onchange = () => {
+      try { localStorage.setItem("antiFace", antiFaceEl.checked ? "1" : "0"); } catch (_) {}
+      if (!antiFaceEl.checked) cachedFaceBoxes = [];
+    };
 
     function applyHandOptions() {
       const hq = hqModeEl.checked;
@@ -375,9 +385,9 @@
         try {
           handLandmarker.setOptions({
             numHands: 2,
-            minHandDetectionConfidence: hq ? 0.72 : 0.66,
-            minHandPresenceConfidence: hq ? 0.68 : 0.62,
-            minTrackingConfidence: hq ? 0.65 : 0.58
+            minHandDetectionConfidence: hq ? 0.82 : 0.78,
+            minHandPresenceConfidence: hq ? 0.78 : 0.74,
+            minTrackingConfidence: hq ? 0.66 : 0.60
           });
         } catch (err) {
           console.warn("HandLandmarker.setOptions warning:", err);
@@ -595,8 +605,13 @@
     let loopTimer = null;
     let activeSessionId = 0;
     let handLandmarker = null;          // 新版 @mediapipe/tasks-vision HandLandmarker (优先)
+    let faceDetector = null;            // 轻量 BlazeFace 人脸检测器（用于过滤脸部/下巴误检）
     let trackerEngineName = "";
     let lastVideoTs = 0;
+    let lastFaceTs = 0;
+    let faceFrameCounter = 0;
+    let cachedFaceBoxes = [];           // [{ x0, y0, x1, y1 }] 归一化扩展人脸区域
+    let cachedFaceTs = 0;
     let hands = null;                   // 旧版 @mediapipe/hands (自动回退)
     let handsReady = false;
     let recording = false;
@@ -960,11 +975,14 @@
     }
 
     // 左右手时空追踪器：入场严检防人脸误检 + 确认后硬锁定防画圈(快/慢)切手
-    let handTrack = { Left: null, Right: null };        // { cx, cy, ts, createdAt, flipVotes }
+    let handTrack = { Left: null, Right: null };        // { cx, cy, ts, createdAt, flipVotes, outsideFaceConfirmed }
     let handAppearStreak = { Left: 0, Right: 0 };       // 新出现手部需连续确认，过滤瞬时人脸误检
     const TRACK_MAX_AGE_MS = 450;                       // 移出画面超 0.45s 自动释放，方便换另一只手
     const TRACK_MATCH_DIST = 0.28;                      // 双手同时在画面时的空间匹配半径
-    const SINGLE_HAND_MATCH_DIST = 0.58;                // 仅单手在画面时容忍大跨度挥动
+    const SINGLE_HAND_MATCH_DIST = 0.50;                // 仅单手在画面时容忍大跨度挥动
+    const PLAUSIBLE_TRACK_DIST = 0.22;                  // 仅在紧邻上一帧手掌位置内才放宽几何入场阈值（防人脸劫持刚离开的手部轨迹）
+    const FACE_ENTRY_ALLOW_DIST = 0.24;                 // 已在脸外确认的真手进入脸部前方的平滑衔接半径
+    const FACE_CACHE_TTL_MS = 1200;                     // 人脸检测框缓存有效期
     const HAND_CONFIRM_FRAMES = 3;                      // 连续 3 帧稳定出现才确认入场
     const LOCK_SETTLE_MS = 600;                         // 入场前 0.6s 允许纠正初始误判，之后持续在场硬锁定
     const FLIP_CONFIRM_FRAMES = 4;                      // 入场 0.6s 内的纠错帧数
@@ -980,22 +998,55 @@
       return Math.hypot(a.cx - b.cx, a.cy - b.cy);
     }
 
+    function isHandInFaceRegion(lm, center) {
+      if (!antiFaceEl || !antiFaceEl.checked || cachedFaceBoxes.length === 0) return false;
+      for (const fb of cachedFaceBoxes) {
+        const palmIn =
+          center.cx >= fb.x0 && center.cx <= fb.x1 &&
+          center.cy >= fb.y0 && center.cy <= fb.y1;
+        if (palmIn) return true;
+        let insideCount = 0;
+        for (const p of lm) {
+          if (p.x >= fb.x0 && p.x <= fb.x1 && p.y >= fb.y0 && p.y <= fb.y1) {
+            insideCount += 1;
+          }
+        }
+        if (insideCount >= 11) return true;
+      }
+      return false;
+    }
+
     function isPlausibleHand(lm, handedScore, isAlreadyTracked) {
       // 1. Handedness confidence gate (strict for brand-new hands to block faces; relaxed for tracked hands during rotation)
-      const minScore = isAlreadyTracked ? 0.45 : 0.78;
+      const minScore = isAlreadyTracked ? 0.45 : 0.80;
       if (handedScore < minScore) return false;
 
+      // Aspect-ratio corrected 2D distance helper (prevents 16:9 webcam distortion)
+      const aspect = (canvas.width || 640) / Math.max(1, canvas.height || 480);
+      const d = (i, j) => Math.hypot((lm[i].x - lm[j].x) * aspect, lm[i].y - lm[j].y);
+
       // 2. Palm scale sanity check (reject tiny noise and oversized face blobs)
-      const palmLen = Math.hypot(lm[9].x - lm[0].x, lm[9].y - lm[0].y);
-      if (palmLen < 0.045 || palmLen > 0.54) return false;
+      const palmLen = d(9, 0);
+      if (palmLen < 0.048 || palmLen > 0.62) return false;
 
       // 3. Palm width-to-length proportion (strict on entry; relaxed once tracked so side-angle slow circles never drop!)
-      const palmWidth = Math.hypot(lm[17].x - lm[5].x, lm[17].y - lm[5].y);
+      const palmWidth = d(17, 5);
       const ratio = palmWidth / palmLen;
-      const minRatio = isAlreadyTracked ? 0.08 : 0.25;
+      const minRatio = isAlreadyTracked ? 0.08 : 0.28;
       if (ratio < minRatio || ratio > 1.35) return false;
 
-      // 4. Overall hand bounding box sanity (reject collapsed or screen-filling false blobs)
+      // 4. Anatomical MCP & knuckle-arc sanity check (suppresses warped face/chin hallucinations)
+      const mcpDists = [d(5, 0), palmLen, d(13, 0), d(17, 0)];
+      const minMcp = Math.min(...mcpDists);
+      const maxMcp = Math.max(...mcpDists);
+      if (minMcp / palmLen < (isAlreadyTracked ? 0.35 : 0.48)) return false;
+      if (maxMcp / palmLen > 1.55) return false;
+
+      const knuckleChain = d(5, 9) + d(9, 13) + d(13, 17);
+      const minKnuckle = isAlreadyTracked ? 0.14 : 0.30;
+      if (knuckleChain / palmLen < minKnuckle || knuckleChain / palmLen > 1.75) return false;
+
+      // 5. Overall hand bounding box sanity (reject collapsed or screen-filling false blobs)
       let minX = 1, maxX = 0, minY = 1, maxY = 0;
       for (const p of lm) {
         if (p.x < minX) minX = p.x;
@@ -1137,6 +1188,9 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       // 1. Pre-filter candidates (suppress face/background false positives)
+      if (cachedFaceBoxes.length > 0 && (now - cachedFaceTs) > FACE_CACHE_TTL_MS) {
+        cachedFaceBoxes = [];
+      }
       const candidates = [];
       for (let i = 0; i < lms.length; i++) {
         const lm = lms[i];
@@ -1148,15 +1202,28 @@
         const center = palmCenter(lm);
         const aliveL = handTrack.Left && (now - handTrack.Left.ts) <= TRACK_MAX_AGE_MS;
         const aliveR = handTrack.Right && (now - handTrack.Right.ts) <= TRACK_MAX_AGE_MS;
-        const nearRadius = (aliveL !== aliveR && lms.length === 1) ? SINGLE_HAND_MATCH_DIST : TRACK_MATCH_DIST;
+        const inFace = isHandInFaceRegion(lm, center);
+
+        // If detection falls inside the detected face/chin region, only allow it when it
+        // smoothly continues a real hand that was already confirmed OUTSIDE the face.
+        if (inFace) {
+          const fromOutsideL = aliveL && handTrack.Left.outsideFaceConfirmed && dist2D(center, handTrack.Left) < FACE_ENTRY_ALLOW_DIST;
+          const fromOutsideR = aliveR && handTrack.Right.outsideFaceConfirmed && dist2D(center, handTrack.Right) < FACE_ENTRY_ALLOW_DIST;
+          if (!fromOutsideL && !fromOutsideR) {
+            continue;
+          }
+        }
+
+        // Only relax entry geometry checks if the hand is genuinely close to an existing track
+        // (prevents a face flicker across the screen from hijacking a recently dropped hand's track)
         const nearExisting =
-          (aliveL && dist2D(center, handTrack.Left) < nearRadius) ||
-          (aliveR && dist2D(center, handTrack.Right) < nearRadius);
+          (aliveL && dist2D(center, handTrack.Left) < PLAUSIBLE_TRACK_DIST) ||
+          (aliveR && dist2D(center, handTrack.Right) < PLAUSIBLE_TRACK_DIST);
 
         if (!isPlausibleHand(lm, score, nearExisting)) {
           continue;
         }
-        candidates.push({ lm, rawSide, score, cx: center.cx, cy: center.cy });
+        candidates.push({ lm, rawSide, score, cx: center.cx, cy: center.cy, inFace });
       }
 
       // 2. Resolve stable Left/Right IDs with spatial continuity & flip hysteresis
@@ -1178,7 +1245,8 @@
           cy: item.cy,
           ts: now,
           createdAt: item.createdAt || (prevTrack && prevTrack.createdAt) || now,
-          flipVotes: item.flipVotes || 0
+          flipVotes: item.flipVotes || 0,
+          outsideFaceConfirmed: Boolean((prevTrack && prevTrack.outsideFaceConfirmed) || (!item.inFace && handAppearStreak[side] >= HAND_CONFIRM_FRAMES))
         };
 
         // Require HAND_CONFIRM_FRAMES consecutive detections for brand-new hands (kills 1-2 frame face flickers)
@@ -1238,7 +1306,7 @@
           10000,
           "新版 HandLandmarker 脚本加载超时"
         );
-        const { FilesetResolver, HandLandmarker } = visionMod;
+        const { FilesetResolver, HandLandmarker, FaceDetector } = visionMod;
         const vision = await withTimeout(
           FilesetResolver.forVisionTasks("/static/mediapipe/tasks/wasm"),
           15000,
@@ -1252,9 +1320,9 @@
           },
           runningMode: "VIDEO",
           numHands: 2,
-          minHandDetectionConfidence: hq ? 0.72 : 0.66,
-          minHandPresenceConfidence: hq ? 0.68 : 0.62,
-          minTrackingConfidence: hq ? 0.65 : 0.58
+          minHandDetectionConfidence: hq ? 0.82 : 0.78,
+          minHandPresenceConfidence: hq ? 0.78 : 0.74,
+          minTrackingConfidence: hq ? 0.66 : 0.60
         });
 
         try {
@@ -1272,6 +1340,28 @@
             "HandLandmarker CPU 初始化超时"
           );
           trackerEngineName = "新版 HandLandmarker (CPU)";
+        }
+
+        // 可选初始化轻量 BlazeFace 人脸检测器（仅 ~230KB，CPU 节流运行，不与 GPU 手部检测抢上下文）
+        if (FaceDetector && !faceDetector) {
+          try {
+            faceDetector = await withTimeout(
+              FaceDetector.createFromOptions(vision, {
+                baseOptions: {
+                  modelAssetPath: "/static/mediapipe/tasks/blaze_face_short_range.tflite",
+                  delegate: "CPU"
+                },
+                runningMode: "VIDEO",
+                minDetectionConfidence: 0.50
+              }),
+              10000,
+              "FaceDetector 初始化超时"
+            );
+            trackerEngineName += " + 防人脸误检";
+          } catch (faceErr) {
+            console.warn("Optional FaceDetector unavailable (run download_assets.py to enable):", faceErr);
+            faceDetector = null;
+          }
         }
         handsReady = true;
         return;
@@ -1353,6 +1443,35 @@
       const t0 = performance.now();
       isProcessing = true;
       try {
+        // Throttled lightweight FaceDetector (~every 8 frames) to mask face/chin/neck false positives
+        if (faceDetector && antiFaceEl && antiFaceEl.checked) {
+          faceFrameCounter = (faceFrameCounter + 1) % 8;
+          if (faceFrameCounter === 1) {
+            try {
+              const fts = Math.max(lastFaceTs + 1, Math.round(performance.now()));
+              lastFaceTs = fts;
+              const fRes = faceDetector.detectForVideo(procCanvas, fts);
+              const dets = (fRes && fRes.detections) || [];
+              cachedFaceBoxes = dets
+                .filter(det => det && det.boundingBox && det.boundingBox.width > 0 && det.boundingBox.height > 0)
+                .map(det => {
+                  const bb = det.boundingBox;
+                  const x0 = bb.originX / pw;
+                  const y0 = bb.originY / ph;
+                  const bw = bb.width / pw;
+                  const bh = bb.height / ph;
+                  return {
+                    x0: x0 - bw * 0.14,
+                    y0: y0 - bh * 0.12,
+                    x1: x0 + bw * 1.14,
+                    y1: y0 + bh * 1.28
+                  };
+                });
+              cachedFaceTs = performance.now();
+            } catch (_) {}
+          }
+        }
+
         if (handLandmarker) {
           const ts = Math.max(lastVideoTs + 1, Math.round(performance.now()));
           lastVideoTs = ts;
@@ -1411,6 +1530,9 @@
       }
       wsPending = false;
       wsPendingSince = 0;
+      cachedFaceBoxes = [];
+      cachedFaceTs = 0;
+      faceFrameCounter = 0;
       resetAllHandPanels();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       btnStart.disabled = false;
