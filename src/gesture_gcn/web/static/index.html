@@ -227,7 +227,7 @@
     <div class="card">
       <div class="options-bar">
         <label>
-          <input type="checkbox" id="swapHands" checked /> 交换左右（标反了切一下）
+          <input type="checkbox" id="swapHands" /> 交换左右（标反了切一下）
         </label>
         <label>
           <input type="checkbox" id="hqMode" /> 高精度（远距离更稳）
@@ -342,10 +342,12 @@
     const swapHandsEl = document.getElementById("swapHands");
     const hqModeEl = document.getElementById("hqMode");
     const autoEnhanceEl = document.getElementById("autoEnhance");
-    // MediaPipe 的 handedness 是按「前置自拍镜像」约定给出的，而这里喂进去的是摄像头原始帧，
-    // 所以默认勾上交换；勾选结果记忆到本地，下次打开不用再调。
+    // 新版 @mediapipe/tasks-vision HandLandmarker 在原始未镜像帧上直接输出真实解剖学左右手（0=Right, 1=Left），
+    // 旧版 @mediapipe/hands 已在回退回调中做过统一翻转，因此两者均默认无需交换（仅硬件自带镜像的特殊摄像头才需勾选）。
+    // 使用新键 swapHandsV2 迁移旧版缓存，避免旧版默认 swapHands="1" 残留导致左右依然颠倒。
     try {
-      const savedSwap = localStorage.getItem("swapHands");
+      localStorage.removeItem("swapHands");
+      const savedSwap = localStorage.getItem("swapHandsV2");
       if (savedSwap !== null) swapHandsEl.checked = savedSwap === "1";
       const savedHq = localStorage.getItem("hqMode");
       if (savedHq !== null) hqModeEl.checked = savedHq === "1";
@@ -353,7 +355,7 @@
       if (savedEnh !== null) autoEnhanceEl.checked = savedEnh === "1";
     } catch (_) {}
     swapHandsEl.onchange = () => {
-      try { localStorage.setItem("swapHands", swapHandsEl.checked ? "1" : "0"); } catch (_) {}
+      try { localStorage.setItem("swapHandsV2", swapHandsEl.checked ? "1" : "0"); } catch (_) {}
       resetAllHandPanels();
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ action: "reset" }));
@@ -1287,7 +1289,18 @@
           locateFile: (file) => `/static/mediapipe/hands/${file}`
         });
         applyHandOptions();
-        hands.onResults(onHandResults);
+        // 旧版 @mediapipe/hands 的 handedness.txt (0=Left, 1=Right) 按自拍镜像假设输出，
+        // 与新版 HandLandmarker (0=Right, 1=Left) 相反；此处统一翻转为未镜像帧上的真实左右手。
+        hands.onResults((results) => {
+          const rawHanded = results.multiHandedness || [];
+          onHandResults({
+            ...results,
+            multiHandedness: rawHanded.map((h) => ({
+              ...h,
+              label: h && h.label === "Left" ? "Right" : "Left"
+            }))
+          });
+        });
       }
       if (!handsReady && typeof hands.initialize === "function") {
         await withTimeout(

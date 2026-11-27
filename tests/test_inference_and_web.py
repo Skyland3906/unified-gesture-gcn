@@ -55,6 +55,15 @@ def test_web_app_status_and_websocket(tmp_path: Path) -> None:
     assert body["num_joints"] == 21
     assert len(body["labels"]) == 6
 
+    # Frontend handedness alignment: HandLandmarker outputs anatomical Left/Right on unmirrored frames,
+    # so swapHands must default to unchecked and legacy @mediapipe/hands fallback must normalize labels.
+    index_res = client.get("/")
+    assert index_res.status_code == 200
+    html = index_res.text
+    assert '<input type="checkbox" id="swapHands" />' in html
+    assert 'id="swapHands" checked' not in html
+    assert 'label: h && h.label === "Left" ? "Right" : "Left"' in html
+
     with client.websocket_connect("/ws/predict") as ws:
         frame = [[0.5, 0.5, 0.0] for _ in range(21)]
         ws.send_json({"landmarks": frame})
