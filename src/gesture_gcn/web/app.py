@@ -44,6 +44,7 @@ class RecordSampleRequest(BaseModel):
 
 class TrainRequest(BaseModel):
     epochs: int = Field(default=18, ge=4, le=100)
+    use_shape_branch: bool | None = None
 
 
 class _AppState:
@@ -64,8 +65,29 @@ class _AppState:
         )
         self.recognizer = self._load_or_bootstrap_recognizer()
         self.infer_lock = threading.Lock()
+        self.train_lock = threading.Lock()
+        self.train_progress: dict[str, Any] = {
+            "running": False,
+            "stage": "idle",
+            "progress": 0.0,
+            "epoch": 0,
+            "total_epochs": 0,
+            "train_loss": None,
+            "train_acc": None,
+            "use_shape_branch": self.recognizer.model.shape_branch is not None,
+            "message": "就绪",
+            "error": None,
+        }
         self.event_engine = GestureEventEngine()
         self.broadcaster = EventBroadcaster()
+
+    def set_train_progress(self, **updates: Any) -> None:
+        with self.train_lock:
+            self.train_progress.update(updates)
+
+    def get_train_progress(self) -> dict[str, Any]:
+        with self.train_lock:
+            return dict(self.train_progress)
 
     def _load_or_bootstrap_recognizer(self) -> GestureRecognizer:
         if self.checkpoint_path.exists():
@@ -132,6 +154,7 @@ def create_app(
             "num_joints": state.spec.num_joints,
             "seq_len": state.cfg.data.seq_len,
             "params_m": round(state.recognizer.model.count_parameters() / 1e6, 3),
+            "use_shape_branch": state.recognizer.model.shape_branch is not None,
             "labels": state.recognizer.labels,
             "recorded_counts": state.store.counts(),
             "control": {
@@ -208,20 +231,68 @@ def create_app(
         state.store.delete_label(label)
         return {"deleted": label, "recorded_counts": state.store.counts()}
 
+    @app.get("/api/train/progress")
+    async def train_progress() -> dict[str, Any]:
+        return state.get_train_progress()
+
     @app.post("/api/train")
     async def train_custom(req: TrainRequest) -> dict[str, Any]:
+        with state.train_lock:
+            if state.train_progress.get("running"):
+                raise HTTPException(status_code=409, detail="当前已有训练任务正在进行，请稍候。")
+            use_shape = (
+                state.cfg.model.use_shape_branch
+                if req.use_shape_branch is None
+                else bool(req.use_shape_branch)
+            )
+            state.train_progress.update(
+                {
+                    "running": True,
+                    "stage": "preparing",
+                    "progress": 0.02,
+                    "epoch": 0,
+                    "total_epochs": req.epochs,
+                    "train_loss": None,
+                    "train_acc": None,
+                    "use_shape_branch": use_shape,
+                    "message": "正在初始化训练任务...",
+                    "error": None,
+                }
+            )
+
+        train_model_cfg = state.cfg.model.model_copy(update={"use_shape_branch": use_shape})
         try:
             model, labels, train_acc = await asyncio.to_thread(
                 state.store.train_model,
-                base_model_cfg=state.cfg.model,
+                base_model_cfg=train_model_cfg,
                 data_cfg=state.cfg.data,
                 spec=state.spec,
                 device=state.device,
                 epochs=req.epochs,
+                on_progress=lambda payload: state.set_train_progress(**payload),
             )
         except ValueError as exc:
+            state.set_train_progress(
+                running=False,
+                stage="error",
+                message=f"训练失败: {exc}",
+                error=str(exc),
+            )
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            state.set_train_progress(
+                running=False,
+                stage="error",
+                message=f"训练异常: {exc}",
+                error=str(exc),
+            )
+            raise
 
+        state.set_train_progress(
+            stage="compiling",
+            progress=0.95,
+            message="正在编译 TorchScript 加速引擎并保存权重...",
+        )
         preprocessor = SkeletonPreprocessor(
             spec=state.spec,
             use_bone_fusion=state.cfg.data.use_bone_fusion,
@@ -238,10 +309,22 @@ def create_app(
         await asyncio.to_thread(new_recognizer.save_checkpoint, state.checkpoint_path, state.cfg.data)
         with state.infer_lock:
             state.recognizer = new_recognizer
+        state.set_train_progress(
+            running=False,
+            stage="done",
+            progress=1.0,
+            epoch=req.epochs,
+            total_epochs=req.epochs,
+            train_acc=round(train_acc, 4),
+            use_shape_branch=use_shape,
+            message=f"训练完成并已热加载！（训练集准确率 {train_acc * 100:.1f}%）",
+            error=None,
+        )
         return {
             "labels": labels,
             "train_acc": round(train_acc, 4),
             "params_m": round(model.count_parameters() / 1e6, 3),
+            "use_shape_branch": use_shape,
         }
 
     def _run_predict_batch(seqs_by_key: dict[str, torch.Tensor]) -> dict[str, Any]:

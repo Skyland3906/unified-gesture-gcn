@@ -185,6 +185,42 @@
       font-size: 0.82rem; color: var(--muted); background: #0f172a;
       padding: 8px 10px; border-radius: 8px; min-height: 36px; margin-top: 10px;
     }
+    .train-progress {
+      display: none; margin-top: 10px; padding: 10px 12px;
+      background: #0f172a; border: 1px solid var(--border); border-radius: 10px;
+    }
+    .train-progress.show { display: block; }
+    .train-progress-head {
+      display: flex; justify-content: space-between; align-items: center; gap: 8px;
+      font-size: 0.8rem; color: var(--text); margin-bottom: 7px;
+    }
+    .train-progress-pct {
+      font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; white-space: nowrap;
+    }
+    .train-progress.done .train-progress-pct { color: var(--green); }
+    .train-progress.err .train-progress-pct { color: var(--red); }
+    .train-bar-bg {
+      width: 100%; height: 10px; background: #1e293b; border-radius: 999px; overflow: hidden;
+    }
+    .train-bar-fill {
+      height: 100%; width: 0%; border-radius: 999px;
+      background: linear-gradient(90deg, #38bdf8, #22c55e, #38bdf8);
+      background-size: 200% 100%;
+      transition: width 0.22s ease;
+    }
+    .train-progress.running .train-bar-fill {
+      animation: trainShimmer 1.4s linear infinite;
+    }
+    .train-progress.done .train-bar-fill {
+      background: var(--green); animation: none;
+    }
+    .train-progress.err .train-bar-fill {
+      background: var(--red); animation: none;
+    }
+    @keyframes trainShimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
   </style>
 </head>
 <body>
@@ -297,10 +333,25 @@
         <input type="text" id="labelInput" placeholder="输入或选择手势名称（如：握拳 / 剪刀手 / 向下划）" value="张开手掌" />
         <button id="btnRecord" class="secondary" disabled>倒计时录制 (空格)</button>
       </div>
+      <div class="options-bar" style="margin-top:8px; margin-bottom:8px;">
+        <label>
+          <input type="checkbox" id="useShapeBranch" /> 启用相对形状分支检测
+        </label>
+        <span id="shapeBranchHint" style="color:var(--muted);">当前模型: 未启用</span>
+      </div>
       <div class="controls" style="margin-top:8px;">
         <button id="btnTrain" class="success">一键训练并热加载</button>
         <button id="btnClearOne" class="secondary">清空当前类别</button>
         <button id="btnClear" class="danger">清空全部样本</button>
+      </div>
+      <div class="train-progress" id="trainProgressWrap">
+        <div class="train-progress-head">
+          <span id="trainProgressText">准备训练...</span>
+          <span class="train-progress-pct" id="trainProgressPct">0%</span>
+        </div>
+        <div class="train-bar-bg">
+          <div class="train-bar-fill" id="trainProgressFill"></div>
+        </div>
       </div>
       <div class="log" id="statusLog">就绪。请点击左侧“开启摄像头实时识别”。</div>
     </div>
@@ -413,11 +464,39 @@
     const btnTrain = document.getElementById("btnTrain");
     const btnClearOne = document.getElementById("btnClearOne");
     const btnClear = document.getElementById("btnClear");
+    const useShapeBranchEl = document.getElementById("useShapeBranch");
+    const shapeBranchHintEl = document.getElementById("shapeBranchHint");
+    const trainProgressWrap = document.getElementById("trainProgressWrap");
+    const trainProgressText = document.getElementById("trainProgressText");
+    const trainProgressPct = document.getElementById("trainProgressPct");
+    const trainProgressFill = document.getElementById("trainProgressFill");
     const cameraSelect = document.getElementById("cameraSelect");
     const btnRefreshCams = document.getElementById("btnRefreshCams");
     const controlEnabledEl = document.getElementById("controlEnabled");
     const requireLeftLockEl = document.getElementById("requireLeftLock");
     const controlStatusEl = document.getElementById("controlStatus");
+
+    let activeUseShapeBranch = false;
+    let shapeBranchSynced = false;
+
+    function renderShapeBranchHint() {
+      const checked = Boolean(useShapeBranchEl.checked);
+      if (checked === activeUseShapeBranch) {
+        shapeBranchHintEl.textContent = activeUseShapeBranch
+          ? "当前模型: 已启用（局部轮廓与扫掠形状）"
+          : "当前模型: 未启用（纯骨架 GCN）";
+        shapeBranchHintEl.style.color = activeUseShapeBranch ? "var(--green)" : "var(--muted)";
+      } else {
+        shapeBranchHintEl.textContent = checked
+          ? "待启用：点击「一键训练并热加载」生效"
+          : "待关闭：点击「一键训练并热加载」生效";
+        shapeBranchHintEl.style.color = "var(--amber)";
+      }
+    }
+
+    useShapeBranchEl.onchange = () => {
+      renderShapeBranchHint();
+    };
 
     let controlConfig = {
       enabled: true,
@@ -807,8 +886,15 @@
         const res = await fetch("/api/status");
         const data = await res.json();
         recordedCounts = data.recorded_counts || {};
+        activeUseShapeBranch = Boolean(data.use_shape_branch);
+        if (!shapeBranchSynced) {
+          useShapeBranchEl.checked = activeUseShapeBranch;
+          shapeBranchSynced = true;
+        }
+        renderShapeBranchHint();
+        const shapeTag = activeUseShapeBranch ? "相对形状分支: 开启" : "相对形状分支: 关闭";
         modelMeta.textContent =
-          `运行设备: ${zhDevice(data.device)} | 骨架: ${zhSkeleton(data.skeleton_type)} | 窗口: ${data.seq_len} 帧 | 参数量: ${data.params_m}M | 类别数: ${data.labels.length}`;
+          `运行设备: ${zhDevice(data.device)} | 骨架: ${zhSkeleton(data.skeleton_type)} | 窗口: ${data.seq_len} 帧 | 参数量: ${data.params_m}M | 类别数: ${data.labels.length} | ${shapeTag}`;
         if (data.control) {
           controlConfig = data.control;
           controlEnabledEl.checked = Boolean(controlConfig.enabled);
@@ -1860,25 +1946,79 @@
       }
     });
 
+    function setTrainProgressUI(pct, text, stateClass = "running") {
+      const clamped = Math.max(0, Math.min(100, Math.round(pct)));
+      trainProgressWrap.classList.add("show");
+      trainProgressWrap.classList.remove("running", "done", "err");
+      if (stateClass) trainProgressWrap.classList.add(stateClass);
+      trainProgressFill.style.width = `${clamped}%`;
+      trainProgressPct.textContent = `${clamped}%`;
+      trainProgressText.textContent = text;
+    }
+
     btnTrain.onclick = async () => {
+      const wantShapeBranch = Boolean(useShapeBranchEl.checked);
+      const totalEpochs = 22;
       btnTrain.disabled = true;
-      logMsg("正在使用真实录制样本训练手势模型（含速度特征与类别均衡增强）...");
+      useShapeBranchEl.disabled = true;
+      const modeDesc = wantShapeBranch ? "骨架 GCN + 相对形状分支" : "纯骨架 GCN";
+      const tStart = performance.now();
+      setTrainProgressUI(2, `正在启动训练（${modeDesc}，共 ${totalEpochs} 轮）...`, "running");
+      logMsg(`正在使用真实录制样本训练手势模型（${modeDesc}，含速度特征与类别均衡增强）...`);
+
+      let pollTimer = null;
+      let pollInFlight = false;
+      const pollProgress = async () => {
+        if (pollInFlight) return;
+        pollInFlight = true;
+        try {
+          const pr = await fetch("/api/train/progress");
+          if (pr.ok) {
+            const p = await pr.json();
+            const elapsedSec = ((performance.now() - tStart) / 1000).toFixed(1);
+            const pct = Math.max(2, Math.min(99, (Number(p.progress) || 0) * 100));
+            if (p.running || p.stage === "training" || p.stage === "preparing" || p.stage === "compiling") {
+              setTrainProgressUI(pct, `${p.message || "训练中..."} · 已用 ${elapsedSec}s`, "running");
+            }
+          }
+        } catch (_) {
+        } finally {
+          pollInFlight = false;
+        }
+      };
+      pollTimer = setInterval(pollProgress, 250);
+
       try {
         const res = await fetch("/api/train", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ epochs: 22 })
+          body: JSON.stringify({ epochs: totalEpochs, use_shape_branch: wantShapeBranch })
         });
         const data = await res.json();
+        const elapsedSec = ((performance.now() - tStart) / 1000).toFixed(1);
         if (!res.ok) {
+          setTrainProgressUI(100, `训练失败（${elapsedSec}s）：${data.detail || "未知错误"}`, "err");
           logMsg("训练失败: " + data.detail);
         } else {
+          shapeBranchSynced = false;
           await fetchStatus();
           const zhNames = data.labels.map(zhLabel).join("、");
-          logMsg(`训练完成并已热加载！类别: ${zhNames} | 训练集准确率: ${(data.train_acc * 100).toFixed(1)}%`);
+          const branchStatus = data.use_shape_branch ? "已启用相对形状分支检测" : "纯骨架 GCN";
+          setTrainProgressUI(
+            100,
+            `训练完成并已热加载（${branchStatus} · 准确率 ${(data.train_acc * 100).toFixed(1)}% · 用时 ${elapsedSec}s）`,
+            "done"
+          );
+          logMsg(`训练完成并已热加载（${branchStatus}，${data.params_m}M）！类别: ${zhNames} | 训练集准确率: ${(data.train_acc * 100).toFixed(1)}%`);
         }
+      } catch (err) {
+        const elapsedSec = ((performance.now() - tStart) / 1000).toFixed(1);
+        setTrainProgressUI(100, `训练请求异常（${elapsedSec}s）：${err.message}`, "err");
+        logMsg("训练异常: " + err.message);
       } finally {
+        if (pollTimer) clearInterval(pollTimer);
         btnTrain.disabled = false;
+        useShapeBranchEl.disabled = false;
       }
     };
 

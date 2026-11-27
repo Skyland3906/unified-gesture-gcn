@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import torch
@@ -86,7 +87,12 @@ class Trainer:
         avg_acc = total_correct / max(total_samples, 1)
         return avg_loss, avg_acc
 
-    def fit(self, train_loader: DataLoader, val_loader: DataLoader) -> list[EpochMetrics]:
+    def fit(
+        self,
+        train_loader: DataLoader,
+        val_loader: DataLoader,
+        on_epoch_end: Callable[[EpochMetrics, int], None] | None = None,
+    ) -> list[EpochMetrics]:
         history: list[EpochMetrics] = []
         for epoch in range(1, self.cfg.epochs + 1):
             train_loss, train_acc = self._run_epoch(train_loader, train=True)
@@ -101,6 +107,9 @@ class Trainer:
                 val_acc=val_acc,
             )
             history.append(metrics)
+
+            if on_epoch_end is not None:
+                on_epoch_end(metrics, self.cfg.epochs)
 
             if epoch == 1 or epoch % self.cfg.log_interval == 0 or epoch == self.cfg.epochs:
                 print(

@@ -29,6 +29,8 @@ class ModelConfig(BaseModel):
     use_dre: bool = True
     use_mstcn: bool = True
     mstcn_dilations: list[int] = Field(default_factory=lambda: [1, 2, 3, 4], min_length=1)
+    use_shape_branch: bool = False
+    shape_grid_size: int = Field(default=8, ge=4, le=16)
     dropout: float = Field(default=0.1, ge=0.0, lt=1.0)
 
     @model_validator(mode="after")

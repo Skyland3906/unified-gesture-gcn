@@ -22,6 +22,8 @@ model:
   use_dre: true
   use_mstcn: true
   mstcn_dilations: [1, 2, 3, 4]
+  use_shape_branch: false
+  shape_grid_size: 8
   dropout: 0.1
 
 train:

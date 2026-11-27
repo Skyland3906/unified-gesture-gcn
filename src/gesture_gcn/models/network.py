@@ -8,6 +8,7 @@ from torch import nn
 from gesture_gcn.config import ModelConfig
 from gesture_gcn.data.skeleton import HandSkeletonSpec
 from gesture_gcn.models.block import UnifiedGestureBlock
+from gesture_gcn.models.shape import RelativeShapeBranch
 
 
 class UnifiedGestureGCN(nn.Module):
@@ -52,6 +53,15 @@ class UnifiedGestureGCN(nn.Module):
             prev_ch = out_ch
 
         self.blocks = nn.ModuleList(blocks)
+        self.shape_branch: RelativeShapeBranch | None = (
+            RelativeShapeBranch(
+                spec=spec,
+                out_channels=prev_ch,
+                grid_size=cfg.shape_grid_size,
+            )
+            if cfg.use_shape_branch
+            else None
+        )
         self.dropout = nn.Dropout(p=cfg.dropout)
         self.classifier = nn.Linear(prev_ch, cfg.num_classes)
 
@@ -70,6 +80,8 @@ class UnifiedGestureGCN(nn.Module):
             h = block(h, dynamic_range)
         # Global Average Pooling over (T, N)
         pooled = h.mean(dim=(2, 3))
+        if self.shape_branch is not None:
+            pooled = self.shape_branch(x, pooled)
         return self.classifier(self.dropout(pooled))
 
     def count_parameters(self) -> int:

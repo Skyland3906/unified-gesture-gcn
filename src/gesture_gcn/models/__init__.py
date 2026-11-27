@@ -5,6 +5,7 @@ from gesture_gcn.models.dagc import DualStreamDAGC
 from gesture_gcn.models.dre import DynamicRangeEmbedding
 from gesture_gcn.models.mstcn import MultiScaleTCN, StandardTCN
 from gesture_gcn.models.network import UnifiedGestureGCN
+from gesture_gcn.models.shape import RelativeShapeBranch
 from gesture_gcn.models.topology import (
     AttentionRelationUnit,
     DifferenceRelationUnit,
@@ -18,6 +19,7 @@ __all__ = [
     "DynamicRangeEmbedding",
     "GroupedTopologyAggregation",
     "MultiScaleTCN",
+    "RelativeShapeBranch",
     "StandardTCN",
     "UnifiedGestureBlock",
     "UnifiedGestureGCN",

@@ -8,6 +8,13 @@
 
 ## 2026-11-27
 
+### 2026-11-27 20:01 | `feat`: 新增手势区域相对形状分支、网页端开关与实时训练可视进度条
+- 新增 [src/gesture_gcn/models/shape.py](src/gesture_gcn/models/shape.py) 实现 `RelativeShapeBranch`：基于窗口归一化骨架提取 4 通道局部 `8×8` 高斯软光栅网格（手部轮廓占据、指尖轮廓、扫掠轨迹密度、带时间先后的 MHI 运动历史网格）与 21 维相对几何描述子（兼顾轴对齐宽高比/有向位移与旋转不变 2D PCA 细长度、刚性掌骨尺度归一化指尖展开度与分散度、环形空心度及有向绕转角），通过样本自适应残差门控融合进 `UnifiedGestureGCN`，完整支持 TorchScript 动态 Batch 编译与旧权重向后兼容。
+- 在 [src/gesture_gcn/config.py](src/gesture_gcn/config.py) 与 [configs/default.yaml](configs/default.yaml) 中新增 `use_shape_branch`（默认 `false`）和 `shape_grid_size` 配置开关，并在 [src/gesture_gcn/models/network.py](src/gesture_gcn/models/network.py) 接入分支装配。
+- 在 [src/gesture_gcn/engine/trainer.py](src/gesture_gcn/engine/trainer.py)、[src/gesture_gcn/inference/recorder.py](src/gesture_gcn/inference/recorder.py) 与 [src/gesture_gcn/web/app.py](src/gesture_gcn/web/app.py) 中新增 Epoch 级进度回调、`GET /api/train/progress` 实时训练进度接口，以及 `POST /api/train` 的 `use_shape_branch` 动态训练参数与 `/api/status` 状态透出。
+- 在 Web Studio 前端 [src/gesture_gcn/web/static/index.html](src/gesture_gcn/web/static/index.html) 新增「启用相对形状分支检测」开关、状态提示与实时可视训练进度条（展示阶段、当前轮次、准确率、Loss、耗时与流光动画）。
+- 在 [tests/test_modules.py](tests/test_modules.py) 与 [tests/test_inference_and_web.py](tests/test_inference_and_web.py) 补充时间方向性、45° 旋转不变性、SHREC-22、TorchScript 编译与 Web 训练开关/进度接口端到端测试（全量 17 项通过）。
+
 ### 2026-11-27 18:54 | `chore`: 更新 12 类真实手势预训练权重 checkpoints/unified_gesture_gcn.pt
 - 更新默认模型权重 [checkpoints/unified_gesture_gcn.pt](checkpoints/unified_gesture_gcn.pt)（约 1.2 MB，9 通道 Joint+Bone+Velocity、32 帧窗口），包含在 macOS 环境下新训练的 12 类完整静态+动态手势（`static_open_palm`、`static_fist`、`static_ok_pinch`、`static_peace`、`dynamic_swipe_left/right/up/down`、`dynamic_push`、`dynamic_pull`、`dynamic_grab_close`、`dynamic_circle_wave`）。
 

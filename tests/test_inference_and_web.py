@@ -54,6 +54,7 @@ def test_web_app_status_and_websocket(tmp_path: Path) -> None:
     body = res.json()
     assert body["num_joints"] == 21
     assert len(body["labels"]) == 6
+    assert body["use_shape_branch"] is False
 
     # Frontend handedness alignment: HandLandmarker outputs anatomical Left/Right on unmirrored frames,
     # so swapHands must default to unchecked and legacy @mediapipe/hands fallback must normalize labels.
@@ -65,6 +66,10 @@ def test_web_app_status_and_websocket(tmp_path: Path) -> None:
     assert 'label: h && h.label === "Left" ? "Right" : "Left"' in html
     assert '<input type="checkbox" id="antiFace" checked />' in html
     assert "blaze_face_short_range.tflite" in html
+    assert 'id="useShapeBranch"' in html
+    assert "启用相对形状分支检测" in html
+    assert 'id="trainProgressWrap"' in html
+    assert "/api/train/progress" in html
 
     with client.websocket_connect("/ws/predict") as ws:
         frame = [[0.5, 0.5, 0.0] for _ in range(21)]
@@ -119,6 +124,29 @@ def test_web_app_status_and_websocket(tmp_path: Path) -> None:
         ev = ev_ws.receive_json()
         assert ev["event"] == "gesture_triggered"
         assert ev["hand"] == "Right"
+
+    # End-to-end training with relative shape branch toggle + live progress endpoint
+    clip_a = [[[0.5 + 0.01 * i, 0.5, 0.0] for i in range(21)] for _ in range(8)]
+    clip_b = [[[0.4 + 0.02 * t, 0.5, 0.0] for _ in range(21)] for t in range(8)]
+    assert client.post("/api/samples", json={"label": "static_open_palm", "frames": clip_a}).status_code == 200
+    assert client.post("/api/samples", json={"label": "dynamic_swipe_left", "frames": clip_b}).status_code == 200
+
+    train_res = client.post("/api/train", json={"epochs": 4, "use_shape_branch": True})
+    assert train_res.status_code == 200
+    train_body = train_res.json()
+    assert train_body["use_shape_branch"] is True
+    assert set(train_body["labels"]) == {"static_open_palm", "dynamic_swipe_left"}
+
+    prog_res = client.get("/api/train/progress")
+    assert prog_res.status_code == 200
+    prog_body = prog_res.json()
+    assert prog_body["running"] is False
+    assert prog_body["stage"] == "done"
+    assert prog_body["progress"] == 1.0
+    assert prog_body["use_shape_branch"] is True
+
+    status_after = client.get("/api/status").json()
+    assert status_after["use_shape_branch"] is True
 
 
 def test_gesture_event_engine_debounce_cooldown_and_lock() -> None:

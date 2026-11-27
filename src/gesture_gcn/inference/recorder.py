@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -12,7 +14,7 @@ from torch.utils.data import DataLoader, Dataset
 from gesture_gcn.config import DataConfig, ModelConfig, TrainConfig
 from gesture_gcn.data.skeleton import HandSkeletonSpec
 from gesture_gcn.data.transforms import SkeletonPreprocessor
-from gesture_gcn.engine.trainer import Trainer
+from gesture_gcn.engine.trainer import EpochMetrics, Trainer
 from gesture_gcn.models.network import UnifiedGestureGCN
 
 
@@ -154,11 +156,23 @@ class CustomGestureStore:
         spec: HandSkeletonSpec,
         device: torch.device,
         epochs: int = 18,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[UnifiedGestureGCN, list[str], float]:
         """Train a fresh UnifiedGestureGCN on all recorded real-hand clips."""
         labels = sorted(k for k, v in self._clips_by_label.items() if len(v) > 0)
         if len(labels) < 2:
             raise ValueError("请至少录制 2 个不同手势类别的样本后再训练。")
+
+        if on_progress is not None:
+            on_progress(
+                {
+                    "stage": "preparing",
+                    "progress": 0.05,
+                    "epoch": 0,
+                    "total_epochs": epochs,
+                    "message": f"正在构建 {len(labels)} 类手势的增强训练样本...",
+                }
+            )
 
         clips: list[tuple[torch.Tensor, int]] = []
         for idx, label in enumerate(labels):
@@ -187,6 +201,27 @@ class CustomGestureStore:
             log_interval=6,
         )
         trainer = Trainer(model=model, cfg=train_cfg, device=device)
-        history = trainer.fit(loader, loader)
+
+        def _handle_epoch(metrics: EpochMetrics, total_epochs: int) -> None:
+            if on_progress is None:
+                return
+            ratio = 0.08 + 0.84 * (metrics.epoch / max(total_epochs, 1))
+            on_progress(
+                {
+                    "stage": "training",
+                    "progress": round(ratio, 4),
+                    "epoch": metrics.epoch,
+                    "total_epochs": total_epochs,
+                    "train_loss": round(metrics.train_loss, 4),
+                    "train_acc": round(metrics.train_acc, 4),
+                    "message": (
+                        f"正在训练第 {metrics.epoch}/{total_epochs} 轮"
+                        f" · 准确率 {metrics.train_acc * 100:.1f}%"
+                        f" · Loss {metrics.train_loss:.3f}"
+                    ),
+                }
+            )
+
+        history = trainer.fit(loader, loader, on_epoch_end=_handle_epoch)
         final_acc = history[-1].train_acc
         return model, labels, final_acc
