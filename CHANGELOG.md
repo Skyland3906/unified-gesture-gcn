@@ -8,6 +8,9 @@
 
 ## 2026-11-27
 
+### 2026-11-27 20:30 | `docs`: 将 README 目录说明升级为可点击的文件与目录功能速查表
+- 将 [README.md](README.md) 原纯文本目录树替换为「核心目录」与「一键启动与项目文件」两张带直达链接的功能速查表，完整覆盖 `checkpoints/`、`configs/`、`src/gesture_gcn/`、`scripts/`、`tests/` 及跨平台启动脚本与文档说明。
+
 ### 2026-11-27 20:13 | `docs`: 在 README 顶部新增显眼的更新日志跳转按钮与提示入口
 - 在 [README.md](README.md) 顶部标题下方新增醒目的 `CHANGELOG.md` 徽章按钮与 GitHub `[!TIP]` 高亮跳转入口，并在目录结构中补充 `CHANGELOG.md` 说明。
 

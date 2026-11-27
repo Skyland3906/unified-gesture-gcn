@@ -13,27 +13,30 @@
 
 ---
 
-## 目录结构
+## 文件与目录功能速查
 
-```text
-├── .github/workflows/ci.yml          # GitHub Actions 自动化测试
-├── CHANGELOG.md                      # 项目功能更新日志（按时间倒序记录每次迭代）
-├── Dockerfile                        # 一键云端部署（兼容 Hugging Face Spaces / Render）
-├── configs/default.yaml              # 声明式实验配置（支持一键消融实验）
-├── pyproject.toml                    # 现代 Python 依赖与 pytest/ruff 配置
-├── scripts/
-│   ├── download_assets.py            # 下载 MediaPipe Hands 本地静态资源（零外网 CDN 依赖）
-│   ├── run_demo.py                   # CLI 合成静+动态基准训练与推理测速
-│   └── run_web.py                    # 启动实时摄像头手势识别 & 在线录制训练 Web Studio
-├── src/gesture_gcn/
-│   ├── config.py                     # Pydantic 强类型配置校验
-│   ├── data/                         # 骨架拓扑注册表、安全窗口归一化、DRE 提取、合成基准
-│   ├── models/                       # ARU/DRU/Grouped-TAM、DualStreamDAGC、DRE、MS-TCN、UnifiedGestureGCN
-│   ├── engine/                       # 训练、评估与延迟测速引擎
-│   ├── inference/                    # 滑动窗口缓存、Checkpoint 推理器、真实样本录制与在线训练
-│   └── web/                          # FastAPI + WebSocket 实时推理与交互式前端
-└── tests/                            # 单元测试、消融梯度检查与端到端集成测试
-```
+### 核心目录
+
+| 目录 | 功能说明 |
+| :--- | :--- |
+| [`checkpoints/`](checkpoints/) | 默认 12 类静态+动态手势预训练权重（`unified_gesture_gcn.pt`，默认启用相对形状分支） |
+| [`configs/`](configs/) | 模型/训练配置（[`default.yaml`](configs/default.yaml)）与手势控电脑按键映射（[`pc_control.yaml`](configs/pc_control.yaml)） |
+| [`src/gesture_gcn/`](src/gesture_gcn/) | 核心源码：骨架预处理（`data/`）、GCN + 相对形状分支网络（`models/`）、训练引擎（`engine/`）、实时推理与事件防抖（`inference/`）、Web Studio 界面与接口（`web/`） |
+| [`scripts/`](scripts/) | 命令行脚本：下载本地 MediaPipe 资源（`download_assets.py`）、启动网页端（`run_web.py`）、手势控电脑客户端（`pc_controller.py`）、基准演示（`run_demo.py`） |
+| [`tests/`](tests/) | 自动化测试套件（模型消融、相对形状分支、TorchScript 编译、Web/WebSocket 与控制器单测） |
+
+### 一键启动与项目文件
+
+| 文件 | 功能说明 |
+| :--- | :--- |
+| [`start_web.sh`](start_web.sh) / [`start_web.bat`](start_web.bat) | macOS·Linux / Windows 一键启动实时摄像头手势识别 Web Studio |
+| [`start_pc_controller.sh`](start_pc_controller.sh) / [`start_pc_controller.bat`](start_pc_controller.bat) | macOS·Linux / Windows 一键启动手势操控电脑客户端（PPT 翻页、缩放、音量等） |
+| [`CHANGELOG.md`](CHANGELOG.md) | 项目功能更新日志（按时间倒序记录每次迭代、修复与性能优化） |
+| [`README.md`](README.md) | 项目首页说明、功能速查与本地/云端快速上手指南 |
+| [`AGENT.md`](AGENT.md) / [`AGENT_DEPLOY.md`](AGENT_DEPLOY.md) | 自动化部署、验收清单、排错指南与协作提交规范 |
+| [`pyproject.toml`](pyproject.toml) | Python 项目元数据、依赖清单以及 `pytest` / `ruff` 工具配置 |
+| [`Dockerfile`](Dockerfile) / [`.dockerignore`](.dockerignore) | Docker 容器化构建配置（支持 Hugging Face Spaces / Render 一键云端部署） |
+| [`LICENSE`](LICENSE) | 项目开源许可证（MIT License） |
 
 ---
 
