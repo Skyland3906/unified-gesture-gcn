@@ -204,6 +204,8 @@ def test_velocity_preprocessor_and_kinematic_prior() -> None:
         "dynamic_swipe_up",
         "dynamic_swipe_down",
         "dynamic_grab_close",
+        "dynamic_circle_wave",
+        "static_open_palm",
     ]
     model_cfg = ModelConfig(num_classes=len(labels), channels=[32, 32], num_groups=4)
     model = UnifiedGestureGCN(cfg=model_cfg, spec=spec, in_channels=9)
@@ -211,9 +213,39 @@ def test_velocity_preprocessor_and_kinematic_prior() -> None:
 
     uniform = torch.full((len(labels),), 1.0 / len(labels))
     refined = rec._apply_kinematic_prior(seq, uniform, float(dr.mean().item()))
-    # Moving screen-right with wide-open fingers must prefer swipe_right over swipe_left and grab_close
+    # Moving screen-right with wide-open fingers must prefer swipe_right over swipe_left, grab_close, and circle_wave
     assert refined[1] > refined[0] * 4.0
     assert refined[1] > refined[4] * 4.0
+    assert refined[1] > refined[5] * 4.0
+
+    # Diagonal lift / non-circular transition must suppress dynamic_circle_wave instead of letting it absorb mass
+    seq_diag = seq.clone()
+    ys_diag = torch.linspace(0.72, 0.35, 32)
+    for t in range(32):
+        seq_diag[0, t, :] = xs[t]
+        seq_diag[1, t, 0] = ys_diag[t]
+        seq_diag[1, t, 9] = ys_diag[t] - 0.15
+        for tip in (8, 12, 16, 20):
+            seq_diag[1, t, tip] = ys_diag[t] - 0.35
+    refined_diag = rec._apply_kinematic_prior(seq_diag, uniform, 0.18)
+    assert refined_diag[5] < refined_diag[6] * 0.25
+
+    # Genuine full-circle trajectory (360 deg in XY) must NOT penalize dynamic_circle_wave
+    import math
+
+    seq_circle = torch.zeros(3, 32, 21)
+    angles = torch.linspace(0.0, 2.0 * math.pi, 32)
+    for t in range(32):
+        cx = 0.5 + 0.14 * math.cos(float(angles[t].item()))
+        cy = 0.5 + 0.14 * math.sin(float(angles[t].item()))
+        seq_circle[0, t, :] = cx
+        seq_circle[1, t, 0] = cy
+        seq_circle[1, t, 9] = cy - 0.12
+        for tip in (8, 12, 16, 20):
+            seq_circle[1, t, tip] = cy - 0.28
+    refined_circle = rec._apply_kinematic_prior(seq_circle, uniform, 0.22)
+    assert refined_circle[5] > refined_circle[0] * 4.0
+    assert refined_circle[5] >= refined_circle[6] * 0.95
 
     # Return-stroke suppression: immediately after swipe_right, returning left is damped
     rec._swipe_guard["Right"] = ("dynamic_swipe_right", 100.0, 0)

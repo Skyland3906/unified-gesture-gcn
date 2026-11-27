@@ -185,6 +185,44 @@ class GestureRecognizer:
         open_end = float(open_curve[-min(2, t_len) :].mean().item())
         max_close_drop = max(open_start_full - open_end, open_start_recent - open_end)
 
+        # 2D palm-center trajectory geometry for genuine circle-wave validation
+        palm_pts = 0.5 * (raw_seq[:2, :, 0] + raw_seq[:2, :, 9])  # (2, T)
+        span_x = float((palm_pts[0].max() - palm_pts[0].min()).item())
+        span_y = float((palm_pts[1].max() - palm_pts[1].min()).item())
+        min_span = min(span_x, span_y)
+        max_span = max(span_x, span_y)
+        span_ratio = min_span / max(max_span, 1e-4)
+
+        step_diffs = palm_pts[:, 1:] - palm_pts[:, :-1]  # (2, T-1)
+        path_len = float(torch.linalg.norm(step_diffs, dim=0).sum().item())
+        net_disp = float(torch.linalg.norm(palm_pts[:, -1] - palm_pts[:, 0]).item())
+        tortuosity = path_len / max(net_disp, 1e-4)
+
+        center = palm_pts.mean(dim=1, keepdim=True)  # (2, 1)
+        rel = palm_pts - center  # (2, T)
+        radii = torch.linalg.norm(rel, dim=0)  # (T,)
+        cross = rel[0, :-1] * rel[1, 1:] - rel[1, :-1] * rel[0, 1:]
+        dot = rel[0, :-1] * rel[0, 1:] + rel[1, :-1] * rel[1, 1:]
+        dtheta = torch.atan2(cross, dot)
+        valid_steps = (radii[:-1] > 0.015) & (radii[1:] > 0.015)
+        if bool(valid_steps.any().item()):
+            valid_dtheta = dtheta[valid_steps]
+            abs_net_angle = float(abs(valid_dtheta.sum().item()))
+            total_abs_angle = float(valid_dtheta.abs().sum().item())
+            winding_consistency = abs_net_angle / max(total_abs_angle, 1e-4)
+        else:
+            abs_net_angle = 0.0
+            winding_consistency = 0.0
+
+        is_genuine_circle = (
+            min_span >= 0.065
+            and span_ratio >= 0.32
+            and path_len >= 0.24
+            and tortuosity >= 1.65
+            and abs_net_angle >= 3.5
+            and winding_consistency >= 0.55
+        )
+
         # Check active return-stroke guard for this hand (clears quickly after a brief stationary pause)
         suppressed_opposite: str | None = None
         if hand is not None and hand in self._swipe_guard:
@@ -208,18 +246,26 @@ class GestureRecognizer:
                 # Require genuine screen-right displacement (dx <= -0.08) and horizontal dominance
                 if dx > -0.08 or abs_dx < 1.25 * abs_dy:
                     weights[i] *= 0.10
+                elif is_genuine_circle:
+                    weights[i] *= 0.20
             elif lbl == "dynamic_swipe_left":
                 # Require genuine screen-left displacement (dx >= +0.08) and horizontal dominance
                 if dx < 0.08 or abs_dx < 1.25 * abs_dy:
                     weights[i] *= 0.10
+                elif is_genuine_circle:
+                    weights[i] *= 0.20
             elif lbl == "dynamic_swipe_up":
                 # Require genuine upward displacement (dy <= -0.08) and vertical dominance
                 if dy > -0.08 or abs_dy < 1.25 * abs_dx:
                     weights[i] *= 0.10
+                elif is_genuine_circle:
+                    weights[i] *= 0.20
             elif lbl == "dynamic_swipe_down":
                 # Require genuine downward displacement (dy >= +0.08) and vertical dominance
                 if dy < 0.08 or abs_dy < 1.25 * abs_dx:
                     weights[i] *= 0.10
+                elif is_genuine_circle:
+                    weights[i] *= 0.20
             elif lbl == "dynamic_push":
                 if ds < 0.06:
                     weights[i] *= 0.15
@@ -230,6 +276,12 @@ class GestureRecognizer:
                 # Genuine grab must actually close fingers and end relatively closed
                 if open_end > 1.50 or max_close_drop < 0.14:
                     weights[i] *= 0.12
+            elif lbl == "dynamic_circle_wave":
+                # Genuine circle requires both-axis span, loop tortuosity, and >=200 deg consistent sweep
+                if not is_genuine_circle:
+                    weights[i] *= 0.08
+                elif suppressed_opposite is not None and abs_net_angle < 4.5:
+                    weights[i] *= 0.20
 
             # Return-stroke suppression: damp opposite direction immediately after a swipe/push/pull
             if suppressed_opposite is not None and lbl == suppressed_opposite:
