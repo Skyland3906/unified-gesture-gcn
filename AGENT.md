@@ -141,6 +141,7 @@ docker run -p 7860:7860 unified-gesture-gcn
 
 | 路径 | 职责 |
 | :--- | :--- |
+| `CHANGELOG.md` | 项目功能更新日志（每次 `git commit` 与推送 GitHub 前必须同步记录改动时间与内容） |
 | `configs/default.yaml` | 模型结构、序列长度、速度特征、设备（`auto`/`cpu`/`cuda`/`mps`）与训练超参 |
 | `configs/pc_control.yaml` | 手势 -> 操作系统动作映射（翻页、缩放、放映开关、音量、自定义组合键） |
 | `scripts/download_assets.py` | 下载本地 MediaPipe Hands 静态资源至 `src/gesture_gcn/web/static/mediapipe/hands/` |
@@ -185,9 +186,15 @@ docker run -p 7860:7860 unified-gesture-gcn
 
 ## 8. 开发协作与 Git 提交规范
 
-- **每次完成功能改动或 Bug 修复并验收通过后，必须使用中文编写清晰的 `git commit` 提交信息并提交到本地仓库**（不要把未验收或调试临时文件混入提交）。
-- 推荐提交格式：`<类型>: <中文改动核心说明>`，例如：
-  - `feat: 升级 HandLandmarker 并增加暗部自适应提亮增强`
-  - `fix: 修复单手画圈时左右手身份跳变问题`
-  - `perf: 合并双手 Batch=2 推理并启用 TorchScript 加速`
-- 如改动涉及多个文件或关键参数调整，建议在 commit 正文中补充要点列表，方便后续回溯；仅在用户明确要求时再执行 `git push`。
+- **每次 `git commit` 时必须同步更新 [CHANGELOG.md](CHANGELOG.md)**：
+  - 在完成功能改动、Bug 修复、性能优化或文档变更并验收通过后，提交前必须在 `CHANGELOG.md` 顶部按时间倒序（最新在前）追加本次改动条目，包含**精确到分钟的改动时间**（`YYYY-MM-DD HH:MM`）、**改动类型**（`feat` / `fix` / `perf` / `docs` / `refactor` 等）、**核心标题**与**具体改动要点**，并将 `CHANGELOG.md` 与本次代码改动一并 `git add` 提交。
+- **每次上传 / `git push` 到 GitHub 前必须核对并补全 [CHANGELOG.md](CHANGELOG.md)**：
+  - 仅在用户明确要求时执行 `git push`。
+  - 推送前必须检查 `git log` 与 `CHANGELOG.md`，确保待上传到 GitHub 的每一次本地改动（包括改动时间与核心内容）都已完整记录在 `CHANGELOG.md` 中；若有遗漏或新增变更，必须先更新 `CHANGELOG.md` 并完成提交后再推送。
+- **中文 `git commit` 提交信息规范**：
+  - 每次完成功能改动或 Bug 修复并验收通过后，必须使用中文编写清晰的 `git commit` 提交信息并提交到本地仓库（不要把未验收或调试临时文件混入提交）。
+  - 推荐提交格式：`<类型>: <中文改动核心说明>`，例如：
+    - `feat: 升级 HandLandmarker 并增加暗部自适应提亮增强`
+    - `fix: 修复单手画圈时左右手身份跳变问题`
+    - `perf: 合并双手 Batch=2 推理并启用 TorchScript 加速`
+  - 如改动涉及多个文件或关键参数调整，建议在 commit 正文中补充要点列表，方便后续回溯。
